@@ -31,23 +31,32 @@ jobs:
 
       - name: Accept Android licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-      - name: Create debug keystore
+
+      - name: Restore (or create) signing keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
         run: |
           cd "$ROOT"
-          [ -f debug.keystore ] || keytool -genkeypair -v -keystore debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > debug.keystore
+          else
+            echo "WARNING: KEYSTORE_B64 secret not set, generating a temporary key (updates over an installed app will NOT work)"
+            keytool -genkeypair -keystore debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
       - name: Build debug APK
         run: |
           cd "$ROOT"
           if [ -f gradlew ]; then
             chmod +x gradlew
-            ./gradlew assembleDebug --stacktrace
+            ./gradlew assembleDebug --stacktrace -PversionCode=${{ github.run_number }} -PversionName=1.0.${{ github.run_number }}
           else
             V=$(grep -h distributionUrl gradle/wrapper/gradle-wrapper.properties 2>/dev/null | sed -E 's/.*gradle-([0-9.]+)-.*/\1/')
             V=${V:-8.13}
             echo "Using Gradle $V"
             curl -sSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-$V-bin.zip"
             unzip -q /tmp/gradle.zip -d /tmp
-            /tmp/gradle-$V/bin/gradle assembleDebug --stacktrace
+            /tmp/gradle-$V/bin/gradle assembleDebug --stacktrace -PversionCode=${{ github.run_number }} -PversionName=1.0.${{ github.run_number }}
           fi
 
       - name: Collect APK
@@ -61,9 +70,10 @@ jobs:
           name: app-debug-apk
           path: out/app-debug.apk
 
-      - name: Publish as release (direct APK download)
+      - name: Publish release (versioned)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete latest -y --cleanup-tag || true
-          gh release create latest out/app-debug.apk --title "Latest APK" --notes "Debug build"
+          gh release create "v1.0.${{ github.run_number }}" out/app-debug.apk \
+            --title "v1.0.${{ github.run_number }}" \
+            --notes "Build ${{ github.run_number }}" --latest
