@@ -1,10 +1,18 @@
 package com.example.ui.chat
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.speech.RecognizerIntent
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,7 +46,9 @@ import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AlternateEmail
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Bookmarks
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -52,10 +62,14 @@ import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.HourglassTop
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.Stop
@@ -97,6 +111,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -108,11 +124,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.domain.model.AttachedFileRef
+import com.example.domain.model.AttachedImageRef
 import com.example.domain.model.ModelPricing
 import com.example.domain.model.OpenCodeMessage
 import com.example.domain.model.OpenCodePart
 import com.example.domain.model.OpenCodeServerStatus
 import com.example.domain.model.OpenCodeSession
+import com.example.domain.model.PromptTemplate
 import com.example.domain.model.SessionContextUsage
 import com.example.domain.model.SetupWizardStage
 import com.example.domain.model.SseConnectionStatus
@@ -124,12 +142,14 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
     onOpenServers: () -> Unit,
     onOpenCodeEditor: (remotePath: String, line: Int?) -> Unit,
+    onOpenGitPanel: (workspacePath: String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -147,6 +167,27 @@ fun ChatScreen(
     var deleteTarget by remember { mutableStateOf<OpenCodeSession?>(null) }
     var revertTargetMessageId by remember { mutableStateOf<String?>(null) }
     var showOpenCodeAuthDialog by remember { mutableStateOf(false) }
+    var showTemplatesSheet by remember { mutableStateOf(false) }
+
+    val voiceLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            val spoken = matches?.firstOrNull()?.trim()
+            if (!spoken.isNullOrBlank()) {
+                viewModel.appendVoiceText(spoken)
+            }
+        }
+    }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 4),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.attachImagesFromUris(uris)
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.toastMessages.collect { msg ->
@@ -261,9 +302,14 @@ fun ChatScreen(
 
             WorkspaceHeaderBar(
                 workspacePath = uiState.activeWorkspacePath,
+                gitBranch = uiState.activeGitBranch,
+                gitDirtyCount = uiState.activeGitDirtyCount,
                 onClick = {
                     viewModel.openWorkspacePicker()
                     showWorkspaceSheet = true
+                },
+                onGitBadgeClick = {
+                    onOpenGitPanel(uiState.activeWorkspacePath)
                 },
             )
 
@@ -278,6 +324,7 @@ fun ChatScreen(
                 if (isDualPane || uiState.activeSessionId == null) {
                     SessionsListPane(
                         uiState = uiState,
+                        onSearchQueryChange = viewModel::onSessionSearchChange,
                         onCreateSession = { viewModel.createSession() },
                         onRefresh = viewModel::refreshAll,
                         onSyncServerAuth = viewModel::syncOpenCodeAuthAndRetry,
@@ -324,6 +371,24 @@ fun ChatScreen(
                         onForkSession = {
                             uiState.activeSessionId?.let { viewModel.forkSession(it) }
                         },
+                        onExportMarkdown = {
+                            val md = viewModel.buildActiveSessionMarkdownExport()
+                            if (md != null) {
+                                val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/markdown"
+                                    putExtra(Intent.EXTRA_SUBJECT, uiState.activeSession?.title ?: "PocketPilot Chat")
+                                    putExtra(Intent.EXTRA_TEXT, md)
+                                }
+                                runCatching {
+                                    context.startActivity(
+                                        Intent.createChooser(
+                                            sendIntent,
+                                            context.getString(R.string.chat_export_share_title),
+                                        ),
+                                    )
+                                }
+                            }
+                        },
                         onRevertMessage = { revertTargetMessageId = it },
                         onOpenFile = { path -> onOpenCodeEditor(path, null) },
                         onCopyMessage = { msg ->
@@ -360,11 +425,41 @@ fun ChatScreen(
                                 showFilePickerSheet = true
                             }
                         },
-                        onAttachClick = {
+                        onAttachServerFile = {
                             viewModel.openFilePicker()
                             showFilePickerSheet = true
                         },
+                        onAttachPhoto = {
+                            runCatching {
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                )
+                            }
+                        },
                         onRemoveAttachment = viewModel::removeAttachedFile,
+                        onRemoveImage = viewModel::removeAttachedImage,
+                        onVoiceInputClick = {
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(
+                                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                                )
+                                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                                putExtra(
+                                    RecognizerIntent.EXTRA_PROMPT,
+                                    context.getString(R.string.chat_voice_prompt),
+                                )
+                            }
+                            runCatching {
+                                voiceLauncher.launch(intent)
+                            }.onFailure {
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(context.getString(R.string.chat_voice_unavailable))
+                                }
+                            }
+                        },
+                        onOpenTemplatesSheet = { showTemplatesSheet = true },
+                        onSelectSlashTemplate = viewModel::applyPromptTemplate,
                         onOpenAgentPicker = { showAgentSheet = true },
                         onOpenModelPicker = {
                             viewModel.cancelPendingSwitchModelAndRetry()
@@ -384,6 +479,16 @@ fun ChatScreen(
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter),
+        )
+    }
+
+    if (showTemplatesSheet) {
+        PromptTemplatesSheet(
+            templates = uiState.promptTemplates,
+            onSelectTemplate = viewModel::applyPromptTemplate,
+            onSaveTemplate = viewModel::savePromptTemplate,
+            onDeleteTemplate = viewModel::deletePromptTemplate,
+            onDismiss = { showTemplatesSheet = false },
         )
     }
 
@@ -551,6 +656,7 @@ private fun DisconnectedChatPane(
 @Composable
 private fun SessionsListPane(
     uiState: ChatUiState,
+    onSearchQueryChange: (String) -> Unit,
     onCreateSession: () -> Unit,
     onRefresh: () -> Unit,
     onSyncServerAuth: () -> Unit,
@@ -606,6 +712,44 @@ private fun SessionsListPane(
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(stringResource(R.string.chat_new_session))
             }
+        }
+        if (uiState.sessions.isNotEmpty()) {
+            OutlinedTextField(
+                value = uiState.sessionSearchQuery,
+                onValueChange = onSearchQueryChange,
+                placeholder = {
+                    Text(
+                        text = stringResource(R.string.chat_search_sessions_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+                trailingIcon = if (uiState.sessionSearchQuery.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { onSearchQueryChange("") }) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = stringResource(R.string.action_close),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                } else {
+                    null
+                },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .testTag("chat_sessions_search_input"),
+            )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
@@ -743,20 +887,36 @@ private fun SessionsListPane(
             }
 
             else -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(uiState.sessions, key = { it.id }) { session ->
-                        SessionCard(
-                            session = session,
-                            selected = session.id == uiState.activeSessionId,
-                            onClick = { onOpenSession(session.id) },
-                            onRename = { onRenameSession(session) },
-                            onFork = { onForkSession(session) },
-                            onDelete = { onDeleteSession(session) },
+                val visibleSessions = uiState.filteredSessions
+                if (visibleSessions.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.chat_search_sessions_empty, uiState.sessionSearchQuery),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(visibleSessions, key = { it.id }) { session ->
+                            SessionCard(
+                                session = session,
+                                selected = session.id == uiState.activeSessionId,
+                                onClick = { onOpenSession(session.id) },
+                                onRename = { onRenameSession(session) },
+                                onFork = { onForkSession(session) },
+                                onDelete = { onDeleteSession(session) },
+                            )
+                        }
                     }
                 }
             }
@@ -897,6 +1057,7 @@ private fun ActiveSessionPane(
     onRefreshMessages: () -> Unit,
     onOpenDiffSheet: (focusFile: String?) -> Unit,
     onForkSession: () -> Unit,
+    onExportMarkdown: () -> Unit,
     onRevertMessage: (String) -> Unit,
     onOpenFile: (String) -> Unit,
     onCopyMessage: (OpenCodeMessage) -> Unit,
@@ -905,8 +1066,13 @@ private fun ActiveSessionPane(
     onSwitchModelAndRetry: () -> Unit,
     onCopyDiagnostics: () -> Unit,
     onComposerChange: (String) -> Unit,
-    onAttachClick: () -> Unit,
+    onAttachServerFile: () -> Unit,
+    onAttachPhoto: () -> Unit,
     onRemoveAttachment: (String) -> Unit,
+    onRemoveImage: (String) -> Unit,
+    onVoiceInputClick: () -> Unit,
+    onOpenTemplatesSheet: () -> Unit,
+    onSelectSlashTemplate: (PromptTemplate) -> Unit,
     onOpenAgentPicker: () -> Unit,
     onOpenModelPicker: () -> Unit,
     onSend: () -> Unit,
@@ -1008,6 +1174,17 @@ private fun ActiveSessionPane(
                     },
                     modifier = Modifier.testTag("chat_open_diff_button"),
                 )
+                if (uiState.messages.isNotEmpty()) {
+                    IconButton(
+                        onClick = onExportMarkdown,
+                        modifier = Modifier.testTag("chat_export_markdown_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Share,
+                            contentDescription = stringResource(R.string.chat_export_markdown),
+                        )
+                    }
+                }
                 IconButton(onClick = onForkSession) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.CallSplit,
@@ -1100,16 +1277,30 @@ private fun ActiveSessionPane(
             }
         }
 
+        // Slash-command autocomplete popup
+        SlashCommandPopup(
+            visible = uiState.activeSlashQuery != null,
+            templates = uiState.matchingSlashTemplates,
+            onSelect = onSelectSlashTemplate,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+
         // Composer
         ChatComposerBar(
             text = uiState.composerText,
             attachments = uiState.attachedFiles,
+            attachedImages = uiState.attachedImages,
+            isProcessingImages = uiState.isProcessingImages,
             agentName = uiState.selectedAgentName,
             modelDisplay = uiState.selectedModelDisplay ?: stringResource(R.string.settings_model_not_selected),
             isBusy = uiState.isActiveSessionBusy,
             onTextChange = onComposerChange,
-            onAttachClick = onAttachClick,
+            onAttachServerFile = onAttachServerFile,
+            onAttachPhoto = onAttachPhoto,
             onRemoveAttachment = onRemoveAttachment,
+            onRemoveImage = onRemoveImage,
+            onVoiceInputClick = onVoiceInputClick,
+            onOpenTemplatesSheet = onOpenTemplatesSheet,
             onOpenAgentPicker = onOpenAgentPicker,
             onOpenModelPicker = onOpenModelPicker,
             onSend = onSend,
@@ -1326,18 +1517,54 @@ private fun ChatMessageBubble(
                     }
 
                     is OpenCodePart.FileAttachment -> {
-                        AssistChip(
-                            onClick = {
-                                val path = part.url.removePrefix("file://")
-                                if (path.startsWith("/")) onOpenFile(path)
-                            },
-                            label = {
-                                Text(
-                                    text = "@${part.filename}",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                        if (part.mime.startsWith("image/", ignoreCase = true) && part.url.startsWith("data:image/")) {
+                            val decodedImage = remember(part.id, part.url) {
+                                runCatching {
+                                    val base64Part = part.url.substringAfter("base64,", "")
+                                    if (base64Part.isBlank()) null
+                                    else {
+                                        val bytes = android.util.Base64.decode(base64Part, android.util.Base64.DEFAULT)
+                                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                                    }
+                                }.getOrNull()
+                            }
+                            if (decodedImage != null) {
+                                Image(
+                                    bitmap = decodedImage,
+                                    contentDescription = part.filename,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(160.dp)
+                                        .clip(RoundedCornerShape(12.dp)),
                                 )
-                            },
-                        )
+                            } else {
+                                AssistChip(
+                                    onClick = {},
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    },
+                                    label = {
+                                        Text(
+                                            text = part.filename,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                        )
+                                    },
+                                )
+                            }
+                        } else {
+                            AssistChip(
+                                onClick = {
+                                    val path = part.url.removePrefix("file://")
+                                    if (path.startsWith("/")) onOpenFile(path)
+                                },
+                                label = {
+                                    Text(
+                                        text = "@${part.filename}",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                    )
+                                },
+                            )
+                        }
                     }
 
                     is OpenCodePart.Patch -> {
@@ -1453,17 +1680,25 @@ private fun ChatMessageBubble(
 private fun ChatComposerBar(
     text: String,
     attachments: List<AttachedFileRef>,
+    attachedImages: List<AttachedImageRef>,
+    isProcessingImages: Boolean,
     agentName: String,
     modelDisplay: String,
     isBusy: Boolean,
     onTextChange: (String) -> Unit,
-    onAttachClick: () -> Unit,
+    onAttachServerFile: () -> Unit,
+    onAttachPhoto: () -> Unit,
     onRemoveAttachment: (String) -> Unit,
+    onRemoveImage: (String) -> Unit,
+    onVoiceInputClick: () -> Unit,
+    onOpenTemplatesSheet: () -> Unit,
     onOpenAgentPicker: () -> Unit,
     onOpenModelPicker: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
+    var showAttachMenu by remember { mutableStateOf(false) }
+
     Surface(
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -1473,7 +1708,7 @@ private fun ChatComposerBar(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // Agent & Model selector chips
+            // Agent, Model, Templates, and Voice chips/actions
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1518,9 +1753,94 @@ private fun ChatComposerBar(
                         modifier = Modifier.testTag("chat_model_chip"),
                     )
                 }
+                item(key = "templates_chip") {
+                    AssistChip(
+                        onClick = onOpenTemplatesSheet,
+                        leadingIcon = {
+                            Icon(
+                                Icons.Rounded.Bookmarks,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = "/",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                            )
+                        },
+                        modifier = Modifier.testTag("chat_templates_button"),
+                    )
+                }
             }
 
-            // Attached files chips
+            if (isProcessingImages) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Text(
+                        text = stringResource(R.string.chat_attach_photo_processing),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            // Attached image thumbnails
+            if (attachedImages.isNotEmpty()) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(attachedImages, key = { it.id }) { img ->
+                        val bitmap = remember(img.id) {
+                            runCatching {
+                                BitmapFactory.decodeByteArray(img.previewBytes, 0, img.previewBytes.size)?.asImageBitmap()
+                            }.getOrNull()
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(64.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                        ) {
+                            if (bitmap != null) {
+                                Image(
+                                    bitmap = bitmap,
+                                    contentDescription = img.filename,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.Image,
+                                    contentDescription = img.filename,
+                                    modifier = Modifier.align(Alignment.Center),
+                                )
+                            }
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.72f),
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(3.dp)
+                                    .size(20.dp)
+                                    .clip(CircleShape)
+                                    .clickable { onRemoveImage(img.id) },
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = stringResource(R.string.action_close),
+                                    tint = MaterialTheme.colorScheme.inverseOnSurface,
+                                    modifier = Modifier.padding(3.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Attached server files chips
             if (attachments.isNotEmpty()) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(attachments, key = { it.path }) { file ->
@@ -1545,21 +1865,46 @@ private fun ChatComposerBar(
                 }
             }
 
-            // Text field + @ + Send/Stop
+            // Attach menu + Text field + Voice + Send/Stop
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                IconButton(
-                    onClick = onAttachClick,
-                    modifier = Modifier.testTag("chat_attach_button"),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AlternateEmail,
-                        contentDescription = stringResource(R.string.chat_attach_file),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
+                Box {
+                    IconButton(
+                        onClick = { showAttachMenu = true },
+                        modifier = Modifier.testTag("chat_attach_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AttachFile,
+                            contentDescription = stringResource(R.string.chat_attach_file),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showAttachMenu,
+                        onDismissRequest = { showAttachMenu = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_attach_menu_server_file)) },
+                            leadingIcon = { Icon(Icons.Rounded.AlternateEmail, contentDescription = null) },
+                            onClick = {
+                                showAttachMenu = false
+                                onAttachServerFile()
+                            },
+                            modifier = Modifier.testTag("chat_attach_server_file_item"),
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_attach_menu_photo)) },
+                            leadingIcon = { Icon(Icons.Rounded.Image, contentDescription = null) },
+                            onClick = {
+                                showAttachMenu = false
+                                onAttachPhoto()
+                            },
+                            modifier = Modifier.testTag("chat_attach_photo_item"),
+                        )
+                    }
                 }
 
                 OutlinedTextField(
@@ -1576,6 +1921,17 @@ private fun ChatComposerBar(
                         .weight(1f)
                         .testTag("chat_composer_input"),
                 )
+
+                IconButton(
+                    onClick = onVoiceInputClick,
+                    modifier = Modifier.testTag("chat_voice_button"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Mic,
+                        contentDescription = stringResource(R.string.chat_voice_cd),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
 
                 if (isBusy) {
                     FilledIconButton(
@@ -1594,7 +1950,7 @@ private fun ChatComposerBar(
                 } else {
                     FilledIconButton(
                         onClick = onSend,
-                        enabled = text.isNotBlank() || attachments.isNotEmpty(),
+                        enabled = (text.isNotBlank() || attachments.isNotEmpty() || attachedImages.isNotEmpty()) && !isProcessingImages,
                         modifier = Modifier.testTag("chat_send_button"),
                     ) {
                         Icon(
@@ -1611,7 +1967,10 @@ private fun ChatComposerBar(
 @Composable
 private fun WorkspaceHeaderBar(
     workspacePath: String,
+    gitBranch: String? = null,
+    gitDirtyCount: Int = 0,
     onClick: () -> Unit,
+    onGitBadgeClick: () -> Unit = {},
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -1647,6 +2006,48 @@ private fun WorkspaceHeaderBar(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                if (!gitBranch.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (gitDirtyCount > 0) {
+                            LocalStatusColors.current.warning.copy(alpha = 0.16f)
+                        } else {
+                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
+                        },
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(onClick = onGitBadgeClick)
+                            .testTag("chat_workspace_git_pill"),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.CallSplit,
+                                contentDescription = stringResource(R.string.chat_git_badge_cd),
+                                tint = if (gitDirtyCount > 0) {
+                                    LocalStatusColors.current.warning
+                                } else {
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                },
+                                modifier = Modifier.size(13.dp),
+                            )
+                            Text(
+                                text = if (gitDirtyCount > 0) "$gitBranch • $gitDirtyCount" else gitBranch,
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                color = if (gitDirtyCount > 0) {
+                                    LocalStatusColors.current.warning
+                                } else {
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
                 Icon(
                     imageVector = Icons.Rounded.ChevronRight,
                     contentDescription = stringResource(R.string.workspace_picker_title),

@@ -115,4 +115,20 @@ class AppContainer(context: Context) {
             apiClient = openCodeApiClient,
         )
     }
+
+    val gitRepository: com.example.data.git.GitRepository by lazy {
+        com.example.data.git.GitRepository(connectionManager = sshConnectionManager)
+    }
+
+    val promptTemplateRepository: com.example.data.repository.PromptTemplateRepository by lazy {
+        com.example.data.repository.PromptTemplateRepository(dao = database.promptTemplateDao())
+    }
+
+    val imageAttachmentProcessor: com.example.data.opencode.ImageAttachmentProcessor by lazy {
+        com.example.data.opencode.ImageAttachmentProcessor(context = appContext)
+    }
+
+    val portForwardManager: com.example.data.ssh.PortForwardManager by lazy {
+        com.example.data.ssh.PortForwardManager(connectionManager = sshConnectionManager)
+    }
 }

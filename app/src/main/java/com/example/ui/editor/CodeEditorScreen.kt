@@ -1,9 +1,14 @@
 package com.example.ui.editor
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +38,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -41,8 +48,11 @@ import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.automirrored.rounded.WrapText
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Remove
@@ -76,6 +86,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,9 +94,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -94,6 +108,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.ui.theme.LocalStatusColors
 import com.example.ui.theme.MonoFontFamily
+import kotlinx.coroutines.launch
 
 private val SPECIAL_SYMBOLS = listOf(
     "Tab" to "    ",
@@ -126,9 +141,14 @@ fun CodeEditorScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val editorVerticalScroll = rememberScrollState()
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
+    var showGoToLineDialog by remember { mutableStateOf(false) }
+    var goToLineInput by remember { mutableStateOf("") }
 
     val requestExit = {
         if (uiState.isDirty) {
@@ -148,6 +168,11 @@ fun CodeEditorScreen(
                 CodeEditorEvent.ReloadedFromServer ->
                     snackbarHostState.showSnackbar(context.getString(R.string.editor_code_reloaded))
                 CodeEditorEvent.CloseRequested -> onNavigateBack()
+                is CodeEditorEvent.ScrollToLine -> {
+                    val lineHeightPx = with(density) { (uiState.fontSizeSp * 1.48f).sp.toPx() }
+                    val targetPx = ((event.line - 3).coerceAtLeast(0) * lineHeightPx).toInt()
+                    editorVerticalScroll.animateScrollTo(targetPx)
+                }
                 is CodeEditorEvent.ErrorToast ->
                     snackbarHostState.showSnackbar(event.message)
             }
@@ -183,10 +208,17 @@ fun CodeEditorScreen(
                             )
                         }
                         Text(
-                            text = "${uiState.language.label} • ${stringResource(R.string.editor_code_lines_count, uiState.lineCount)}",
+                            text = "${uiState.language.label} • ${stringResource(R.string.editor_code_cursor_status, uiState.cursorLine, uiState.cursorColumn, uiState.lineCount)}",
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.primary,
                             maxLines = 1,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable(enabled = !uiState.isLoading) {
+                                    goToLineInput = uiState.cursorLine.toString()
+                                    showGoToLineDialog = true
+                                }
+                                .testTag("code_editor_goto_line_trigger"),
                         )
                     }
                 },
@@ -267,6 +299,39 @@ fun CodeEditorScreen(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false },
                         ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.editor_code_goto_line)) },
+                                leadingIcon = { Icon(Icons.Rounded.FormatListNumbered, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    goToLineInput = uiState.cursorLine.toString()
+                                    showGoToLineDialog = true
+                                },
+                                modifier = Modifier.testTag("code_editor_menu_goto_line"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.editor_code_duplicate_line)) },
+                                leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    viewModel.duplicateCurrentLine()
+                                },
+                                modifier = Modifier.testTag("code_editor_menu_duplicate_line"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.editor_code_copy_path)) },
+                                leadingIcon = { Icon(Icons.Rounded.Link, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    clipboard?.setPrimaryClip(ClipData.newPlainText("remote_path", uiState.remotePath))
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar(context.getString(R.string.editor_code_path_copied))
+                                    }
+                                },
+                                modifier = Modifier.testTag("code_editor_menu_copy_path"),
+                            )
+                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = {
                                     Text(
@@ -415,6 +480,7 @@ fun CodeEditorScreen(
                     CodeEditorSurface(
                         uiState = uiState,
                         darkTheme = isDarkSurface,
+                        verticalScroll = editorVerticalScroll,
                         onValueChange = viewModel::onTextValueChange,
                         modifier = Modifier
                             .weight(1f)
@@ -495,16 +561,74 @@ fun CodeEditorScreen(
             },
         )
     }
+    if (showGoToLineDialog) {
+        val parsedLine = goToLineInput.trim().toIntOrNull()
+        val isValidLine = parsedLine != null && parsedLine in 1..uiState.lineCount
+        AlertDialog(
+            onDismissRequest = { showGoToLineDialog = false },
+            title = { Text(stringResource(R.string.editor_code_goto_line)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.editor_code_goto_line_range, uiState.lineCount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = goToLineInput,
+                        onValueChange = { input -> goToLineInput = input.filter { it.isDigit() }.take(7) },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.editor_code_goto_line_label)) },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Go,
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onGo = {
+                                if (isValidLine && parsedLine != null) {
+                                    showGoToLineDialog = false
+                                    viewModel.goToLine(parsedLine)
+                                }
+                            },
+                        ),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("code_editor_goto_line_input"),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (isValidLine && parsedLine != null) {
+                            showGoToLineDialog = false
+                            viewModel.goToLine(parsedLine)
+                        }
+                    },
+                    enabled = isValidLine,
+                    modifier = Modifier.testTag("code_editor_goto_line_confirm"),
+                ) {
+                    Text(stringResource(R.string.editor_code_goto_line_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGoToLineDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
 }
 
 @Composable
 private fun CodeEditorSurface(
     uiState: CodeEditorUiState,
     darkTheme: Boolean,
+    verticalScroll: ScrollState,
     onValueChange: (androidx.compose.ui.text.input.TextFieldValue) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val verticalScroll = rememberScrollState()
     val horizontalScroll = rememberScrollState()
     val fontSize = uiState.fontSizeSp.sp
     val lineHeight = (uiState.fontSizeSp * 1.48f).sp

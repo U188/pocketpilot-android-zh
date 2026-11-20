@@ -35,17 +35,20 @@ class SshTunnelForwarder private constructor(
             sshClient: SSHClient,
             remotePort: Int,
             scope: CoroutineScope,
+            remoteHost: String = "127.0.0.1",
+            preferredLocalPort: Int = 0,
         ): SshTunnelForwarder {
             val loopback = InetAddress.getByName("127.0.0.1")
+            val requestedPort = preferredLocalPort.takeIf { it in 1..65535 } ?: 0
             val serverSocket = ServerSocket().apply {
                 reuseAddress = true
-                bind(InetSocketAddress(loopback, 0))
+                bind(InetSocketAddress(loopback, requestedPort))
             }
             val localPort = serverSocket.localPort
             val params = Parameters(
                 "127.0.0.1",
                 localPort,
-                "127.0.0.1",
+                remoteHost,
                 remotePort,
             )
             val forwarder = sshClient.newLocalPortForwarder(params, serverSocket)

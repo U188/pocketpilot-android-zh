@@ -46,9 +46,17 @@ data class TerminalUiState(
     val fontSizeSp: Float = 13f,
     val snippets: List<TerminalSnippet> = emptyList(),
     val pendingDangerousCommand: PendingDangerousCommand? = null,
+    val searchVisible: Boolean = false,
+    val searchQuery: String = "",
+    val searchMatchLines: List<Int> = emptyList(),
+    val activeSearchMatchIndex: Int = -1,
+    val scrollToLineRequest: Pair<Int, Long>? = null,
 ) {
     val activeTab: TerminalTabItem?
         get() = tabs.firstOrNull { it.id == activeTabId } ?: tabs.firstOrNull()
+
+    val activeMatchLineIndex: Int?
+        get() = searchMatchLines.getOrNull(activeSearchMatchIndex)
 }
 
 class TerminalViewModel(
@@ -175,7 +183,20 @@ class TerminalViewModel(
 
     fun selectTab(tabId: String) {
         if (_uiState.value.tabs.any { it.id == tabId }) {
-            _uiState.update { it.copy(activeTabId = tabId) }
+            _uiState.update { state ->
+                val targetTab = state.tabs.firstOrNull { it.id == tabId }
+                val matches = if (state.searchVisible && state.searchQuery.isNotBlank() && targetTab != null) {
+                    findMatchingLineIndices(targetTab.snapshot.lines.map { it.text }, state.searchQuery)
+                } else {
+                    emptyList()
+                }
+                val activeIdx = if (matches.isNotEmpty()) matches.lastIndex else -1
+                state.copy(
+                    activeTabId = tabId,
+                    searchMatchLines = matches,
+                    activeSearchMatchIndex = activeIdx,
+                )
+            }
         }
     }
 
@@ -263,6 +284,76 @@ class TerminalViewModel(
         val ctrlByte = mapCtrlByte(letter) ?: return
         session.sendBytes(byteArrayOf(ctrlByte))
         _uiState.update { it.copy(ctrlArmed = false) }
+    }
+
+    fun sendTmuxShortcut(commandChar: Char) {
+        val session = activeSession() ?: return
+        // Standard tmux prefix Ctrl+B (0x02) followed by command key
+        session.sendBytes(byteArrayOf(0x02, commandChar.code.toByte()))
+    }
+
+    fun toggleSearch() {
+        _uiState.update { state ->
+            val nextVisible = !state.searchVisible
+            if (!nextVisible) {
+                state.copy(
+                    searchVisible = false,
+                    searchMatchLines = emptyList(),
+                    activeSearchMatchIndex = -1,
+                    scrollToLineRequest = null,
+                )
+            } else {
+                val lines = state.activeTab?.snapshot?.lines?.map { it.text }.orEmpty()
+                val matches = findMatchingLineIndices(lines, state.searchQuery)
+                val activeIdx = if (matches.isNotEmpty()) matches.lastIndex else -1
+                val scrollReq = matches.getOrNull(activeIdx)?.let { it to System.nanoTime() }
+                state.copy(
+                    searchVisible = true,
+                    searchMatchLines = matches,
+                    activeSearchMatchIndex = activeIdx,
+                    scrollToLineRequest = scrollReq,
+                )
+            }
+        }
+    }
+
+    fun onSearchQueryChange(query: String) {
+        _uiState.update { state ->
+            val lines = state.activeTab?.snapshot?.lines?.map { it.text }.orEmpty()
+            val matches = findMatchingLineIndices(lines, query)
+            val activeIdx = if (matches.isNotEmpty()) matches.lastIndex else -1
+            val scrollReq = matches.getOrNull(activeIdx)?.let { it to System.nanoTime() }
+            state.copy(
+                searchQuery = query,
+                searchMatchLines = matches,
+                activeSearchMatchIndex = activeIdx,
+                scrollToLineRequest = scrollReq,
+            )
+        }
+    }
+
+    fun nextSearchMatch() {
+        _uiState.update { state ->
+            val matches = state.searchMatchLines
+            if (matches.isEmpty()) return@update state
+            val nextIdx = (state.activeSearchMatchIndex + 1) % matches.size
+            state.copy(
+                activeSearchMatchIndex = nextIdx,
+                scrollToLineRequest = matches[nextIdx] to System.nanoTime(),
+            )
+        }
+    }
+
+    fun previousSearchMatch() {
+        _uiState.update { state ->
+            val matches = state.searchMatchLines
+            if (matches.isEmpty()) return@update state
+            val prevIdx = if (state.activeSearchMatchIndex <= 0) matches.lastIndex else state.activeSearchMatchIndex - 1
+            state.copy(
+                activeSearchMatchIndex = prevIdx,
+                scrollToLineRequest = matches[prevIdx] to System.nanoTime(),
+            )
+        }
     }
 
     fun pasteText(text: String) {
@@ -386,5 +477,17 @@ class TerminalViewModel(
 
     companion object {
         const val DEFAULT_TMUX_SESSION = "pocket"
+
+        internal fun findMatchingLineIndices(lines: List<String>, query: String): List<Int> {
+            val needle = query.trim()
+            if (needle.isEmpty()) return emptyList()
+            val result = mutableListOf<Int>()
+            for (i in lines.indices) {
+                if (lines[i].contains(needle, ignoreCase = true)) {
+                    result.add(i)
+                }
+            }
+            return result
+        }
     }
 }

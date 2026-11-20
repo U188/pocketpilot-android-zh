@@ -3,6 +3,7 @@ package com.example.ui.terminal
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -43,20 +44,26 @@ import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.TextDecrease
 import androidx.compose.material.icons.rounded.TextIncrease
+import androidx.compose.material.icons.rounded.ViewColumn
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -167,10 +174,13 @@ fun TerminalScreen(
                 onNewTab = { viewModel.openNewTab(attachTmux = false) },
             )
 
-            // Quick Actions Bar (Snippets, Paste, Copy, Clear, Zoom, Keyboard)
+            // Quick Actions Bar (Snippets, Search, tmux, Paste, Copy, Clear, Zoom, Keyboard)
             TerminalToolsBar(
                 activeTab = uiState.activeTab,
+                searchActive = uiState.searchVisible,
                 onOpenSnippets = { showSnippetsSheet = true },
+                onToggleSearch = viewModel::toggleSearch,
+                onSendTmuxShortcut = viewModel::sendTmuxShortcut,
                 onPaste = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                     val clipText = clipboard?.primaryClip
@@ -200,6 +210,18 @@ fun TerminalScreen(
                     keyboardController?.show()
                 },
             )
+
+            AnimatedVisibility(visible = uiState.searchVisible) {
+                TerminalSearchBar(
+                    query = uiState.searchQuery,
+                    matchCount = uiState.searchMatchLines.size,
+                    activeIndex = uiState.activeSearchMatchIndex,
+                    onQueryChange = viewModel::onSearchQueryChange,
+                    onPrev = viewModel::previousSearchMatch,
+                    onNext = viewModel::nextSearchMatch,
+                    onClose = viewModel::toggleSearch,
+                )
+            }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
@@ -240,6 +262,9 @@ fun TerminalScreen(
                     TerminalViewport(
                         tab = activeTab,
                         fontSizeSp = uiState.fontSizeSp,
+                        searchMatchLines = uiState.searchMatchLines,
+                        activeMatchLineIndex = uiState.activeMatchLineIndex,
+                        scrollToLineRequest = uiState.scrollToLineRequest,
                         onViewportResized = viewModel::onViewportResized,
                         onTapToFocus = {
                             runCatching { focusRequester.requestFocus() }
@@ -446,7 +471,10 @@ private fun TerminalTabBar(
 @Composable
 private fun TerminalToolsBar(
     activeTab: TerminalTabItem?,
+    searchActive: Boolean,
     onOpenSnippets: () -> Unit,
+    onToggleSearch: () -> Unit,
+    onSendTmuxShortcut: (Char) -> Unit,
     onPaste: () -> Unit,
     onCopyOutput: () -> Unit,
     onClear: () -> Unit,
@@ -455,6 +483,8 @@ private fun TerminalToolsBar(
     onFontLarger: () -> Unit,
     onToggleKeyboard: () -> Unit,
 ) {
+    var showTmuxMenu by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -473,6 +503,67 @@ private fun TerminalToolsBar(
                 contentDescription = stringResource(R.string.terminal_snippets_title),
                 tint = MaterialTheme.colorScheme.primary,
             )
+        }
+        IconButton(
+            onClick = onToggleSearch,
+            modifier = Modifier.testTag("terminal_search_button"),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = stringResource(R.string.terminal_search_cd),
+                tint = if (searchActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Box {
+            IconButton(
+                onClick = { showTmuxMenu = true },
+                modifier = Modifier.testTag("terminal_tmux_menu_button"),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ViewColumn,
+                    contentDescription = stringResource(R.string.terminal_tmux_menu_cd),
+                )
+            }
+            DropdownMenu(
+                expanded = showTmuxMenu,
+                onDismissRequest = { showTmuxMenu = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.terminal_tmux_new_window)) },
+                    onClick = {
+                        showTmuxMenu = false
+                        onSendTmuxShortcut('c')
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.terminal_tmux_next_window)) },
+                    onClick = {
+                        showTmuxMenu = false
+                        onSendTmuxShortcut('n')
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.terminal_tmux_prev_window)) },
+                    onClick = {
+                        showTmuxMenu = false
+                        onSendTmuxShortcut('p')
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.terminal_tmux_list_windows)) },
+                    onClick = {
+                        showTmuxMenu = false
+                        onSendTmuxShortcut('w')
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.terminal_tmux_detach)) },
+                    onClick = {
+                        showTmuxMenu = false
+                        onSendTmuxShortcut('d')
+                    },
+                )
+            }
         }
         IconButton(
             onClick = onPaste,
@@ -529,9 +620,79 @@ private fun TerminalToolsBar(
 }
 
 @Composable
+private fun TerminalSearchBar(
+    query: String,
+    matchCount: Int,
+    activeIndex: Int,
+    onQueryChange: (String) -> Unit,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                placeholder = { Text(stringResource(R.string.terminal_search_placeholder)) },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("terminal_search_input"),
+            )
+            Text(
+                text = if (matchCount == 0) "0/0" else "${activeIndex + 1}/$matchCount",
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+            IconButton(
+                onClick = onPrev,
+                enabled = matchCount > 0,
+                modifier = Modifier.testTag("terminal_search_prev"),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowUp,
+                    contentDescription = stringResource(R.string.terminal_search_prev_cd),
+                )
+            }
+            IconButton(
+                onClick = onNext,
+                enabled = matchCount > 0,
+                modifier = Modifier.testTag("terminal_search_next"),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = stringResource(R.string.terminal_search_next_cd),
+                )
+            }
+            IconButton(onClick = onClose) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = stringResource(R.string.action_close),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun TerminalViewport(
     tab: TerminalTabItem,
     fontSizeSp: Float,
+    searchMatchLines: List<Int>,
+    activeMatchLineIndex: Int?,
+    scrollToLineRequest: Pair<Int, Long>?,
     onViewportResized: (cols: Int, rows: Int) -> Unit,
     onTapToFocus: () -> Unit,
     onReconnect: () -> Unit,
@@ -552,6 +713,7 @@ private fun TerminalViewport(
     }
 
     val lines = tab.snapshot.lines
+    val matchLineSet = remember(searchMatchLines) { searchMatchLines.toHashSet() }
     val isNearBottom by remember {
         derivedStateOf {
             val total = listState.layoutInfo.totalItemsCount
@@ -561,8 +723,15 @@ private fun TerminalViewport(
     }
 
     LaunchedEffect(tab.snapshot.revision, tab.id) {
-        if (lines.isNotEmpty() && isNearBottom) {
+        if (lines.isNotEmpty() && isNearBottom && activeMatchLineIndex == null) {
             listState.scrollToItem(lines.lastIndex)
+        }
+    }
+
+    LaunchedEffect(scrollToLineRequest) {
+        val targetLine = scrollToLineRequest?.first ?: return@LaunchedEffect
+        if (targetLine in lines.indices) {
+            listState.animateScrollToItem((targetLine - 2).coerceAtLeast(0))
         }
     }
 
@@ -600,12 +769,19 @@ private fun TerminalViewport(
                 .testTag("terminal_viewport"),
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
         ) {
-            itemsIndexed(lines) { _, line ->
+            itemsIndexed(lines) { index, line ->
+                val highlightBg = when {
+                    activeMatchLineIndex == index -> Color(0x55F59E0B)
+                    index in matchLineSet -> Color(0x2AF59E0B)
+                    else -> Color.Transparent
+                }
                 Text(
                     text = if (line.isEmpty()) androidx.compose.ui.text.AnnotatedString(" ") else line,
                     style = monoStyle,
                     softWrap = false,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(highlightBg),
                 )
             }
         }
@@ -805,7 +981,14 @@ private fun TerminalAccessoryKeyBar(
             )
             TerminalKeyChip(label = "^C", onClick = { onSendCtrlChar('C') })
             TerminalKeyChip(label = "^D", onClick = { onSendCtrlChar('D') })
+            TerminalKeyChip(label = "^Z", onClick = { onSendCtrlChar('Z') })
             TerminalKeyChip(label = "^L", onClick = { onSendCtrlChar('L') })
+            TerminalKeyChip(label = "|", onClick = { onSendSpecial("|") })
+            TerminalKeyChip(label = "/", onClick = { onSendSpecial("/") })
+            TerminalKeyChip(label = "~", onClick = { onSendSpecial("~") })
+            TerminalKeyChip(label = "-", onClick = { onSendSpecial("-") })
+            TerminalKeyChip(label = "_", onClick = { onSendSpecial("_") })
+            TerminalKeyChip(label = ">", onClick = { onSendSpecial(">") })
             TerminalKeyChip(label = "←", onClick = { onSendSpecial("\u001B[D") })
             TerminalKeyChip(label = "↓", onClick = { onSendSpecial("\u001B[B") })
             TerminalKeyChip(label = "↑", onClick = { onSendSpecial("\u001B[A") })

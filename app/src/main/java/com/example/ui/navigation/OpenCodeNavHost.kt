@@ -17,6 +17,8 @@ import com.example.ui.components.HostKeyVerificationDialog
 import com.example.ui.editor.CodeEditorScreen
 import com.example.ui.editor.CodeEditorViewModel
 import com.example.ui.files.FileManagerViewModel
+import com.example.ui.git.GitViewModel
+import com.example.ui.ports.PortForwardViewModel
 import com.example.ui.servers.ServerEditorScreen
 import com.example.ui.servers.ServerEditorViewModel
 import com.example.ui.servers.ServersScreen
@@ -82,6 +84,16 @@ fun OpenCodeNavHost(
             serverInstaller = container.openCodeServerInstaller,
             usageRepository = container.usageRepository,
             agentNotificationHelper = container.agentNotificationHelper,
+            promptTemplateRepository = container.promptTemplateRepository,
+            gitRepository = container.gitRepository,
+            imageAttachmentProcessor = container.imageAttachmentProcessor,
+        ),
+    )
+
+    val gitViewModel: GitViewModel = viewModel(
+        factory = GitViewModel.Factory(
+            connectionManager = container.sshConnectionManager,
+            gitRepository = container.gitRepository,
         ),
     )
 
@@ -89,6 +101,12 @@ fun OpenCodeNavHost(
         factory = TerminalViewModel.Factory(
             connectionManager = container.sshConnectionManager,
             snippetRepository = container.terminalSnippetRepository,
+        ),
+    )
+
+    val portForwardViewModel: PortForwardViewModel = viewModel(
+        factory = PortForwardViewModel.Factory(
+            portForwardManager = container.portForwardManager,
         ),
     )
 
@@ -151,7 +169,9 @@ fun OpenCodeNavHost(
                 isOnline = isOnline,
                 chatViewModel = chatViewModel,
                 fileManagerViewModel = fileManagerViewModel,
+                gitViewModel = gitViewModel,
                 terminalViewModel = terminalViewModel,
+                portForwardViewModel = portForwardViewModel,
                 settingsViewModel = settingsViewModel,
                 onOpenServers = {
                     if (!navController.popBackStack(OpenCodeRoutes.SERVERS, inclusive = false)) {

@@ -47,12 +47,22 @@ data class CodeEditorUiState(
 
     val lineCount: Int
         get() = textValue.text.count { it == '\n' } + 1
+
+    val cursorPosition: Pair<Int, Int>
+        get() = CodeEditorViewModel.computeLineAndColumn(textValue.text, textValue.selection.start)
+
+    val cursorLine: Int
+        get() = cursorPosition.first
+
+    val cursorColumn: Int
+        get() = cursorPosition.second
 }
 
 sealed interface CodeEditorEvent {
     data object Saved : CodeEditorEvent
     data object ReloadedFromServer : CodeEditorEvent
     data object CloseRequested : CodeEditorEvent
+    data class ScrollToLine(val line: Int) : CodeEditorEvent
     data class ErrorToast(val message: String) : CodeEditorEvent
 }
 
@@ -128,6 +138,9 @@ class CodeEditorViewModel(
                         activeMatchIndex = if (matches.isNotEmpty()) 0 else -1,
                     )
                 }
+                if (jumpToLine != null && jumpToLine > 1) {
+                    _events.tryEmit(CodeEditorEvent.ScrollToLine(jumpToLine))
+                }
                 if (emitReloadEvent) {
                     _events.tryEmit(CodeEditorEvent.ReloadedFromServer)
                 }
@@ -172,6 +185,27 @@ class CodeEditorViewModel(
         val end = current.selection.max.coerceIn(0, text.length)
         val updatedText = text.substring(0, start) + symbol + text.substring(end)
         val newCursor = start + symbol.length
+        onTextValueChange(
+            TextFieldValue(
+                text = updatedText,
+                selection = TextRange(newCursor),
+            ),
+        )
+    }
+
+    fun goToLine(lineNumber: Int) {
+        val state = _uiState.value
+        val clamped = lineNumber.coerceIn(1, state.lineCount)
+        val offset = computeOffsetForLine(state.textValue.text, clamped)
+        _uiState.update {
+            it.copy(textValue = it.textValue.copy(selection = TextRange(offset)))
+        }
+        _events.tryEmit(CodeEditorEvent.ScrollToLine(clamped))
+    }
+
+    fun duplicateCurrentLine() {
+        val current = _uiState.value.textValue
+        val (updatedText, newCursor) = duplicateLineAtCursor(current.text, current.selection.start)
         onTextValueChange(
             TextFieldValue(
                 text = updatedText,
@@ -394,13 +428,16 @@ class CodeEditorViewModel(
     }
 
     private fun jumpToMatch(index: Int) {
+        var targetLine: Int? = null
         _uiState.update { state ->
             val range = state.searchMatches.getOrNull(index) ?: return@update state
+            targetLine = computeLineAndColumn(state.textValue.text, range.first).first
             state.copy(
                 activeMatchIndex = index,
                 textValue = state.textValue.copy(selection = TextRange(range.first, range.last + 1)),
             )
         }
+        targetLine?.let { _events.tryEmit(CodeEditorEvent.ScrollToLine(it)) }
     }
 
     private fun pushUndo(value: TextFieldValue) {
@@ -424,21 +461,49 @@ class CodeEditorViewModel(
         return matches
     }
 
-    private fun computeOffsetForLine(text: String, targetLine: Int): Int {
-        if (targetLine <= 1) return 0
-        var line = 1
-        for (i in text.indices) {
-            if (text[i] == '\n') {
-                line++
-                if (line == targetLine) return (i + 1).coerceAtMost(text.length)
-            }
-        }
-        return 0
-    }
-
     companion object {
         private const val MAX_UNDO_HISTORY = 100
         private const val REMOTE_POLL_INTERVAL_MS = 5_000L
+
+        internal fun computeOffsetForLine(text: String, targetLine: Int): Int {
+            if (targetLine <= 1 || text.isEmpty()) return 0
+            var line = 1
+            var lastLineStart = 0
+            for (i in text.indices) {
+                if (text[i] == '\n') {
+                    line++
+                    lastLineStart = (i + 1).coerceAtMost(text.length)
+                    if (line == targetLine) return lastLineStart
+                }
+            }
+            return lastLineStart
+        }
+
+        internal fun computeLineAndColumn(text: String, offset: Int): Pair<Int, Int> {
+            val safeOffset = offset.coerceIn(0, text.length)
+            var line = 1
+            var lastNewline = -1
+            for (i in 0 until safeOffset) {
+                if (text[i] == '\n') {
+                    line++
+                    lastNewline = i
+                }
+            }
+            val column = safeOffset - lastNewline
+            return line to column
+        }
+
+        internal fun duplicateLineAtCursor(text: String, cursorOffset: Int): Pair<String, Int> {
+            val safeOffset = cursorOffset.coerceIn(0, text.length)
+            val lineStart = text.lastIndexOf('\n', startIndex = (safeOffset - 1).coerceAtLeast(0))
+                .let { if (it < 0 || safeOffset == 0) 0 else it + 1 }
+            val lineEnd = text.indexOf('\n', startIndex = safeOffset).let { if (it < 0) text.length else it }
+            val lineContent = text.substring(lineStart, lineEnd)
+            val inserted = "\n$lineContent"
+            val updated = text.substring(0, lineEnd) + inserted + text.substring(lineEnd)
+            val newCursor = lineEnd + inserted.length
+            return updated to newCursor
+        }
     }
 
     class Factory(

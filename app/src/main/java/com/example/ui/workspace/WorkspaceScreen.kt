@@ -30,7 +30,10 @@ import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -69,6 +72,10 @@ import com.example.ui.chat.PermissionRequestDialog
 import com.example.ui.components.ConnectionStatusDot
 import com.example.ui.files.FileManagerScreen
 import com.example.ui.files.FileManagerViewModel
+import com.example.ui.files.FilesSubTab
+import com.example.ui.git.GitViewModel
+import com.example.ui.ports.PortForwardSheet
+import com.example.ui.ports.PortForwardViewModel
 import com.example.ui.settings.SettingsScreen
 import com.example.ui.settings.SettingsViewModel
 import com.example.ui.terminal.TerminalScreen
@@ -115,7 +122,9 @@ fun WorkspaceScreen(
     isOnline: Boolean,
     chatViewModel: ChatViewModel,
     fileManagerViewModel: FileManagerViewModel,
+    gitViewModel: GitViewModel,
     terminalViewModel: TerminalViewModel,
+    portForwardViewModel: PortForwardViewModel,
     settingsViewModel: SettingsViewModel,
     onOpenServers: () -> Unit,
     onOpenCodeEditor: (remotePath: String, line: Int?) -> Unit,
@@ -124,7 +133,10 @@ fun WorkspaceScreen(
     onReconnect: () -> Unit,
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(WorkspaceTab.CHAT) }
+    var filesSubTab by rememberSaveable { mutableStateOf(FilesSubTab.FILES) }
+    var showPortForwardSheet by remember { mutableStateOf(false) }
     val chatUiState by chatViewModel.uiState.collectAsStateWithLifecycle()
+    val portForwardUiState by portForwardViewModel.uiState.collectAsStateWithLifecycle()
     var permissionDialogSuppressedId by remember { mutableStateOf<String?>(null) }
 
     val activePermission = chatUiState.currentPermissionPrompt
@@ -146,6 +158,30 @@ fun WorkspaceScreen(
                     actions = {
                         when (connectionState) {
                             is SshConnectionState.Connected -> {
+                                IconButton(
+                                    onClick = { showPortForwardSheet = true },
+                                    modifier = Modifier.testTag("workspace_port_forward_button"),
+                                ) {
+                                    BadgedBox(
+                                        badge = {
+                                            if (portForwardUiState.activeCount > 0) {
+                                                Badge {
+                                                    Text(portForwardUiState.activeCount.toString())
+                                                }
+                                            }
+                                        },
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.SwapHoriz,
+                                            contentDescription = stringResource(R.string.ports_sheet_title),
+                                            tint = if (portForwardUiState.activeCount > 0) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
+                                        )
+                                    }
+                                }
                                 IconButton(
                                     onClick = onDisconnect,
                                     modifier = Modifier.testTag("workspace_quick_disconnect"),
@@ -308,10 +344,26 @@ fun WorkspaceScreen(
                                 viewModel = chatViewModel,
                                 onOpenServers = onOpenServers,
                                 onOpenCodeEditor = onOpenCodeEditor,
+                                onOpenGitPanel = { workspacePath ->
+                                    if (workspacePath.isNotBlank()) {
+                                        gitViewModel.setTargetDirectory(workspacePath, autoRefresh = true)
+                                    }
+                                    filesSubTab = FilesSubTab.GIT
+                                    selectedTab = WorkspaceTab.FILES
+                                },
                             )
 
                             WorkspaceTab.FILES -> FileManagerScreen(
                                 viewModel = fileManagerViewModel,
+                                gitViewModel = gitViewModel,
+                                selectedSubTab = filesSubTab,
+                                onSelectSubTab = { next ->
+                                    filesSubTab = next
+                                    if (next == FilesSubTab.FILES) {
+                                        chatViewModel.refreshGitBadge()
+                                    }
+                                },
+                                activeWorkspacePath = chatUiState.activeWorkspacePath,
                                 onOpenServers = onOpenServers,
                                 onOpenCodeEditor = onOpenCodeEditor,
                                 onAttachToChat = { entry ->
@@ -320,6 +372,7 @@ fun WorkspaceScreen(
                                 },
                                 onSetWorkspace = { path ->
                                     chatViewModel.selectWorkspace(path)
+                                    gitViewModel.setTargetDirectory(path, autoRefresh = false)
                                     selectedTab = WorkspaceTab.CHAT
                                 },
                             )
@@ -360,6 +413,13 @@ fun WorkspaceScreen(
             onDismiss = {
                 permissionDialogSuppressedId = activePermission.id
             },
+        )
+    }
+
+    if (showPortForwardSheet && connectionState is SshConnectionState.Connected) {
+        PortForwardSheet(
+            viewModel = portForwardViewModel,
+            onDismiss = { showPortForwardSheet = false },
         )
     }
 }

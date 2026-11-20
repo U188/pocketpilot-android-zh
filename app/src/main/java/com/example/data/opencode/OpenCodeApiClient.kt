@@ -3,6 +3,7 @@ package com.example.data.opencode
 import com.example.data.local.KeystoreSecretStore
 import com.example.data.ssh.SshConnectionManager
 import com.example.domain.model.AttachedFileRef
+import com.example.domain.model.AttachedImageRef
 import com.example.domain.model.OpenCodeAgent
 import com.example.domain.model.OpenCodeEvent
 import com.example.domain.model.OpenCodeFileDiff
@@ -236,38 +237,16 @@ class OpenCodeApiClient(
         providerId: String?,
         modelId: String?,
         agent: String?,
+        imageAttachments: List<AttachedImageRef> = emptyList(),
     ) = withContext(Dispatchers.IO) {
         val paths = ensureApiDiscovered()
         val (_, baseUrl) = requireBaseUrl()
 
-        val promptText = buildString {
-            val trimmed = text.trim()
-            if (trimmed.isNotEmpty()) append(trimmed)
-            val missingRefs = attachments.filter { !trimmed.contains("@${it.path}") && !trimmed.contains("@${it.name}") }
-            if (missingRefs.isNotEmpty()) {
-                if (isNotEmpty()) append("\n\n")
-                append(missingRefs.joinToString(" ") { "@${it.path}" })
-            }
-        }
-
-        val parts = JSONArray().apply {
-            if (promptText.isNotBlank()) {
-                put(
-                    JSONObject()
-                        .put("type", "text")
-                        .put("text", promptText),
-                )
-            }
-            attachments.forEach { file ->
-                put(
-                    JSONObject()
-                        .put("type", "file")
-                        .put("mime", "text/plain")
-                        .put("filename", file.name)
-                        .put("url", "file://${file.path}"),
-                )
-            }
-        }
+        val parts = buildMessagePartsPayload(
+            text = text,
+            attachments = attachments,
+            imageAttachments = imageAttachments,
+        )
 
         val payload = JSONObject().apply {
             put("parts", parts)
@@ -508,5 +487,49 @@ class OpenCodeApiClient(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        fun buildMessagePartsPayload(
+            text: String,
+            attachments: List<AttachedFileRef>,
+            imageAttachments: List<AttachedImageRef>,
+        ): JSONArray {
+            val promptText = buildString {
+                val trimmed = text.trim()
+                if (trimmed.isNotEmpty()) append(trimmed)
+                val missingRefs = attachments.filter { !trimmed.contains("@${it.path}") && !trimmed.contains("@${it.name}") }
+                if (missingRefs.isNotEmpty()) {
+                    if (isNotEmpty()) append("\n\n")
+                    append(missingRefs.joinToString(" ") { "@${it.path}" })
+                }
+            }
+
+            return JSONArray().apply {
+                if (promptText.isNotBlank()) {
+                    put(
+                        JSONObject()
+                            .put("type", "text")
+                            .put("text", promptText),
+                    )
+                }
+                attachments.forEach { file ->
+                    put(
+                        JSONObject()
+                            .put("type", "file")
+                            .put("mime", "text/plain")
+                            .put("filename", file.name)
+                            .put("url", "file://${file.path}"),
+                    )
+                }
+                imageAttachments.forEach { image ->
+                    put(
+                        JSONObject()
+                            .put("type", "file")
+                            .put("mime", image.mimeType)
+                            .put("filename", image.filename)
+                            .put("url", image.base64DataUrl),
+                    )
+                }
+            }
+        }
     }
 }

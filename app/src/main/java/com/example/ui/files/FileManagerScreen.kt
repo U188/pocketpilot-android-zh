@@ -78,6 +78,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -105,15 +108,26 @@ import com.example.domain.model.FileSortBy
 import com.example.domain.model.LocalSafEntry
 import com.example.domain.model.RemoteFileEntry
 import com.example.ui.chat.RootWorkspaceWarningDialog
+import com.example.ui.git.GitPanelView
+import com.example.ui.git.GitViewModel
 import com.example.ui.theme.LocalStatusColors
 import com.example.ui.theme.MonoFontFamily
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+enum class FilesSubTab {
+    FILES,
+    GIT,
+}
+
 @Composable
 fun FileManagerScreen(
     viewModel: FileManagerViewModel,
+    gitViewModel: GitViewModel,
+    selectedSubTab: FilesSubTab = FilesSubTab.FILES,
+    onSelectSubTab: (FilesSubTab) -> Unit = {},
+    activeWorkspacePath: String = "",
     onOpenServers: () -> Unit,
     onOpenCodeEditor: (remotePath: String, line: Int?) -> Unit,
     onAttachToChat: (RemoteFileEntry) -> Unit = {},
@@ -121,6 +135,7 @@ fun FileManagerScreen(
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val gitUiState by gitViewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     var showCreateFileDialog by remember { mutableStateOf(false) }
@@ -147,6 +162,19 @@ fun FileManagerScreen(
     LaunchedEffect(Unit) {
         viewModel.messages.collect { msg ->
             snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        gitViewModel.messages.collect { msg ->
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    val effectiveGitDir = activeWorkspacePath.ifBlank { uiState.currentPath }
+    LaunchedEffect(selectedSubTab, effectiveGitDir, uiState.isConnected) {
+        if (uiState.isConnected && selectedSubTab == FilesSubTab.GIT && effectiveGitDir.isNotBlank()) {
+            gitViewModel.setTargetDirectory(effectiveGitDir, autoRefresh = true)
         }
     }
 
@@ -199,6 +227,76 @@ fun FileManagerScreen(
                     )
                 }
             }
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    SingleChoiceSegmentedButtonRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .testTag("files_git_segmented_row"),
+                    ) {
+                        SegmentedButton(
+                            selected = selectedSubTab == FilesSubTab.FILES,
+                            onClick = { onSelectSubTab(FilesSubTab.FILES) },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                            modifier = Modifier.testTag("files_segment_files"),
+                        ) {
+                            Text(stringResource(R.string.files_segment_files))
+                        }
+                        val dirtyCount = gitUiState.status.totalChangesCount
+                        val gitLabel = if (gitUiState.status.summary.isGitRepo && dirtyCount > 0) {
+                            "${stringResource(R.string.files_segment_git)} • $dirtyCount"
+                        } else {
+                            stringResource(R.string.files_segment_git)
+                        }
+                        SegmentedButton(
+                            selected = selectedSubTab == FilesSubTab.GIT,
+                            onClick = {
+                                onSelectSubTab(FilesSubTab.GIT)
+                                if (effectiveGitDir.isNotBlank()) {
+                                    gitViewModel.setTargetDirectory(effectiveGitDir, autoRefresh = true)
+                                }
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                            modifier = Modifier.testTag("files_segment_git"),
+                        ) {
+                            Text(gitLabel)
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
+            }
+
+            if (selectedSubTab == FilesSubTab.GIT) {
+                GitPanelView(
+                    uiState = gitUiState,
+                    onRefresh = gitViewModel::refresh,
+                    onInitRepo = gitViewModel::initRepository,
+                    onFetch = gitViewModel::fetch,
+                    onPull = gitViewModel::pull,
+                    onPush = gitViewModel::push,
+                    onStageFile = gitViewModel::stageFile,
+                    onUnstageFile = gitViewModel::unstageFile,
+                    onStageAll = gitViewModel::stageAll,
+                    onUnstageAll = gitViewModel::unstageAll,
+                    onDiscardFile = gitViewModel::discardFile,
+                    onOpenFileDiff = gitViewModel::openFileDiff,
+                    onCloseDiff = gitViewModel::closeDiff,
+                    onCommitMessageChange = gitViewModel::updateCommitMessage,
+                    onPrependCommitPrefix = gitViewModel::prependCommitPrefix,
+                    onToggleAmend = gitViewModel::toggleAmend,
+                    onCommit = gitViewModel::commit,
+                    onLoadBranchesAndLog = gitViewModel::loadBranchesAndLog,
+                    onSwitchBranch = gitViewModel::switchBranch,
+                    onCreateBranch = gitViewModel::createBranch,
+                    onOpenCommitDiff = gitViewModel::openCommitDiff,
+                    onOpenCodeEditor = onOpenCodeEditor,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+            } else {
             BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
             val isDualPane = maxWidth >= 840.dp
 
@@ -346,6 +444,7 @@ fun FileManagerScreen(
                 }
             }
         }
+            }
         }
 
         SnackbarHost(

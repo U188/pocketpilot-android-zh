@@ -674,4 +674,117 @@
     <string name="chat_auth_dialog_desc">Укажите логин и пароль Basic Auth (OPENCODE_SERVER_USERNAME / OPENCODE_SERVER_PASSWORD). Данные будут сохранены в Android Keystore.</string>
     <string name="chat_auth_username_label">Логин</string>
     <string name="chat_auth_password_label">Пароль</string>
+
+    <!-- Git Panel -->
+    <string name="files_segment_files">Файлы</string>
+    <string name="files_segment_git">Git</string>
+    <string name="git_not_repo_title">Папка не является Git-репозиторием</string>
+    <string name="git_not_repo_desc">В каталоге %1$s не найден .git. Вы можете инициализировать новый репозиторий прямо сейчас.</string>
+    <string name="git_init_button">Инициализировать Git</string>
+    <string name="git_branch_label">Ветка</string>
+    <string name="git_branches_and_history">Ветки и история</string>
+    <string name="git_action_fetch">Fetch</string>
+    <string name="git_action_pull">Pull</string>
+    <string name="git_action_push">Push</string>
+    <string name="git_section_staged">К коммиту (Staged) • %1$d</string>
+    <string name="git_section_unstaged">Изменённые (Unstaged) • %1$d</string>
+    <string name="git_section_untracked">Новые файлы (Untracked) • %1$d</string>
+    <string name="git_stage_all">Все в индекс</string>
+    <string name="git_unstage_all">Снять все</string>
+    <string name="git_stage_cd">Добавить в индекс</string>
+    <string name="git_unstage_cd">Убрать из индекса</string>
+    <string name="git_discard_cd">Откатить изменения</string>
+    <string name="git_clean_title">Рабочее дерево чистое</string>
+    <string name="git_clean_desc">Нет незафиксированных изменений в %1$s.</string>
+    <string name="git_commit_placeholder">Сообщение коммита…</string>
+    <string name="git_commit_amend">Amend</string>
+    <string name="git_commit_button">Коммит</string>
+    <string name="git_commit_and_push_button">Коммит и Push</string>
+    <string name="git_discard_dialog_title">Откатить изменения?</string>
+    <string name="git_discard_tracked_desc">Все незафиксированные правки в файле «%1$s» будут безвозвратно сброшены.</string>
+    <string name="git_discard_untracked_desc">Неотслеживаемый файл «%1$s» будет безвозвратно удалён с сервера.</string>
+    <string name="git_discard_confirm">Откатить</string>
+    <string name="git_diff_empty">Нет текстовых различий для отображения.</string>
+    <string name="git_diff_open_editor">Открыть в редакторе</string>
+    <string name="git_tab_branches">Ветки</string>
+    <string name="git_tab_history">История</string>
+    <string name="git_new_branch_placeholder">Имя новой ветки (например, fix/auth)</string>
+    <string name="git_create_branch_button">Создать</string>
+    <string name="git_branch_current">Текущая</string>
+    <string name="git_branch_remote">Удалённая</string>
+    <string name="git_history_empty">Коммитов пока нет</string>
+
+    <!-- Mobile Chat v2: Voice, Prompt Templates, Photos, Search, Export -->
+    <string name="chat_search_sessions_hint">Поиск по сессиям…</string>
+    <string name="chat_search_sessions_empty">По запросу «%1$s» сессии не найдены</string>
+    <string name="chat_export_markdown">Экспорт в Markdown</string>
+    <string name="chat_export_share_title">Поделиться перепиской</string>
+    <string name="chat_voice_cd">Голосовой ввод</string>
+    <string name="chat_voice_prompt">Надиктуйте задачу для агента…</string>
+    <string name="chat_voice_unavailable">На устройстве не найден системный сервис голосового ввода</string>
+    <string name="chat_templates_cd">Шаблоны промптов</string>
+    <string name="chat_templates_title">Шаблоны промптов</string>
+    <string name="chat_templates_subtitle">Нажмите на шаблон, чтобы вставить в поле, или введите / в чате.</string>
+    <string name="chat_templates_new">Новый шаблон</string>
+    <string name="chat_templates_edit">Редактировать шаблон</string>
+    <string name="chat_templates_name_label">Название</string>
+    <string name="chat_templates_command_label">Слэш-команда (без /)</string>
+    <string name="chat_templates_body_label">Текст промпта</string>
+    <string name="chat_templates_auto_send">Отправлять сразу при выборе</string>
+    <string name="chat_templates_auto_send_badge">автоотправка</string>
+    <string name="chat_templates_empty">Шаблонов пока нет. Создайте свой первый шаблон.</string>
+    <string name="chat_attach_menu_server_file">Файл с сервера (@)</string>
+    <string name="chat_attach_menu_photo">Фото / скриншот с телефона</string>
+    <string name="chat_attach_photo_processing">Подготовка изображения…</string>
+    <string name="chat_attach_photo_limit">Можно прикрепить не более %1$d изображений за раз</string>
+    <string name="chat_git_badge_cd">Открыть Git-панель проекта</string>
+    <string name="action_add">Добавить</string>
+    <string name="action_delete">Удалить</string>
+    <string name="action_copy">Копировать</string>
+
+    <!-- Port Forwarding Manager -->
+    <string name="ports_sheet_title">Проброс портов</string>
+    <string name="ports_sheet_subtitle">Локальный SSH-доступ к веб-проектам и API на VPS</string>
+    <string name="ports_active_section">Активные туннели • %1$d</string>
+    <string name="ports_stop_all">Остановить все</string>
+    <string name="ports_active_empty">Нет активных пользовательских туннелей. Выберите порт ниже или добавьте вручную.</string>
+    <string name="ports_action_open_browser">Открыть в браузере</string>
+    <string name="ports_action_open_short">Открыть</string>
+    <string name="ports_action_stop">Остановить</string>
+    <string name="ports_action_forward">Пробросить</string>
+    <string name="ports_url_copied">Скопировано: %1$s</string>
+    <string name="ports_browser_open_error">Не удалось открыть браузер для локального адреса</string>
+    <string name="ports_manual_title">Новый проброс порта</string>
+    <string name="ports_remote_port_label">Порт на сервере</string>
+    <string name="ports_label_optional">Подпись (необязательно)</string>
+    <string name="ports_advanced_options">Дополнительно (хост и локальный порт)</string>
+    <string name="ports_remote_host_label">Хост на сервере</string>
+    <string name="ports_local_port_optional">Локальный порт</string>
+    <string name="ports_auto_placeholder">Авто</string>
+    <string name="ports_create_forward_button">Пробросить порт</string>
+    <string name="ports_discovered_section">Слушающие порты на сервере</string>
+    <string name="ports_scanning_server">Поиск запущенных сервисов…</string>
+    <string name="ports_discovered_empty">Открытых TCP-портов не найдено. Запустите dev-сервер (например, npm run dev) и обновите.</string>
+
+    <!-- Terminal v2: Search & tmux Controls -->
+    <string name="terminal_search_cd">Поиск по выводу терминала</string>
+    <string name="terminal_search_placeholder">Найти в выводе терминала…</string>
+    <string name="terminal_search_prev_cd">Предыдущее совпадение</string>
+    <string name="terminal_search_next_cd">Следующее совпадение</string>
+    <string name="terminal_tmux_menu_cd">Команды tmux</string>
+    <string name="terminal_tmux_new_window">tmux: Новое окно (^B c)</string>
+    <string name="terminal_tmux_next_window">tmux: Следующее окно (^B n)</string>
+    <string name="terminal_tmux_prev_window">tmux: Предыдущее окно (^B p)</string>
+    <string name="terminal_tmux_list_windows">tmux: Список окон (^B w)</string>
+    <string name="terminal_tmux_detach">tmux: Отключиться (^B d)</string>
+
+    <!-- Code Editor v2: Go to Line, Cursor Status & Quick Actions -->
+    <string name="editor_code_cursor_status">Стр %1$d:%2$d / %3$d</string>
+    <string name="editor_code_goto_line">Перейти к строке…</string>
+    <string name="editor_code_goto_line_range">Введите номер строки от 1 до %1$d</string>
+    <string name="editor_code_goto_line_label">Номер строки</string>
+    <string name="editor_code_goto_line_confirm">Перейти</string>
+    <string name="editor_code_duplicate_line">Дублировать строку</string>
+    <string name="editor_code_copy_path">Копировать путь файла</string>
+    <string name="editor_code_path_copied">Путь к файлу скопирован</string>
 </resources>

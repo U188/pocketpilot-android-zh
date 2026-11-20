@@ -1,18 +1,24 @@
 package com.example.ui.chat
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.git.GitRepository
 import com.example.data.local.AppPreferencesRepository
+import com.example.data.opencode.ChatMarkdownExporter
+import com.example.data.opencode.ImageAttachmentProcessor
 import com.example.data.opencode.OpenCodeApiClient
 import com.example.data.opencode.OpenCodeConfigHelper
 import com.example.data.opencode.OpenCodeHttpException
 import com.example.data.opencode.OpenCodeServerInstaller
 import com.example.data.opencode.ProviderApplyOutcome
+import com.example.data.repository.PromptTemplateRepository
 import com.example.data.repository.UsageRepository
 import com.example.data.sftp.SftpRepository
 import com.example.data.ssh.SshConnectionManager
 import com.example.domain.model.AttachedFileRef
+import com.example.domain.model.AttachedImageRef
 import com.example.domain.model.ConfiguredProviderInfo
 import com.example.domain.model.CustomModelEntry
 import com.example.domain.model.CustomProviderSaveRequest
@@ -31,6 +37,7 @@ import com.example.domain.model.OpenCodeServerStatus
 import com.example.domain.model.OpenCodeSession
 import com.example.domain.model.OpenCodeSetupUiState
 import com.example.domain.model.PermissionReplyOption
+import com.example.domain.model.PromptTemplate
 import com.example.domain.model.ProviderSaveStepItem
 import com.example.domain.model.ProviderSaveWarning
 import com.example.domain.model.RemoteFileEntry
@@ -100,9 +107,34 @@ data class ChatUiState(
     val isCreatingWorkspaceFolder: Boolean = false,
     // Token & cost pricing rules from Room
     val modelPricingByKey: Map<String, ModelPricing> = emptyMap(),
+    // Mobile Chat v2: Session search, photo attachments, prompt templates, live Git badge
+    val sessionSearchQuery: String = "",
+    val attachedImages: List<AttachedImageRef> = emptyList(),
+    val isProcessingImages: Boolean = false,
+    val promptTemplates: List<PromptTemplate> = emptyList(),
+    val activeGitBranch: String? = null,
+    val activeGitDirtyCount: Int = 0,
 ) {
     val activeSession: OpenCodeSession?
         get() = sessions.firstOrNull { it.id == activeSessionId }
+
+    val filteredSessions: List<OpenCodeSession>
+        get() {
+            val q = sessionSearchQuery.trim().lowercase()
+            if (q.isEmpty()) return sessions
+            return sessions.filter { s ->
+                s.title.lowercase().contains(q) || s.id.lowercase().contains(q)
+            }
+        }
+
+    val activeSlashQuery: String?
+        get() = PromptTemplateRepository.extractActiveSlashQuery(composerText)
+
+    val matchingSlashTemplates: List<PromptTemplate>
+        get() {
+            val q = activeSlashQuery ?: return emptyList()
+            return PromptTemplateRepository.filterBySlashQuery(promptTemplates, q)
+        }
 
     val isActiveSessionBusy: Boolean
         get() = activeSession?.isBusy == true || isSending
@@ -138,6 +170,9 @@ class ChatViewModel(
     private val serverInstaller: OpenCodeServerInstaller,
     private val usageRepository: UsageRepository,
     private val agentNotificationHelper: AgentNotificationHelper,
+    private val promptTemplateRepository: PromptTemplateRepository,
+    private val gitRepository: GitRepository,
+    private val imageAttachmentProcessor: ImageAttachmentProcessor,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -151,6 +186,7 @@ class ChatViewModel(
     private var setupJob: Job? = null
     private var draftSaveJob: Job? = null
     private var inactivityWatchdogJob: Job? = null
+    private var gitBadgeJob: Job? = null
     private var lastTunnelPort: Int? = null
     private var lastProfileId: Long? = null
     private var restoredDraftOnce = false
@@ -163,6 +199,13 @@ class ChatViewModel(
     private var lastSentAttachments: List<AttachedFileRef> = emptyList()
 
     init {
+        viewModelScope.launch {
+            runCatching { promptTemplateRepository.ensureDefaultsSeeded() }
+            promptTemplateRepository.observeAll().collect { templates ->
+                _uiState.update { it.copy(promptTemplates = templates) }
+            }
+        }
+
         viewModelScope.launch {
             usageRepository.allPricingMap.collect { pricingMap ->
                 _uiState.update { it.copy(modelPricingByKey = pricingMap) }
@@ -622,6 +665,130 @@ class ChatViewModel(
         }
     }
 
+    fun onSessionSearchChange(query: String) {
+        _uiState.update { it.copy(sessionSearchQuery = query) }
+    }
+
+    fun appendVoiceText(spoken: String) {
+        val clean = spoken.trim()
+        if (clean.isEmpty()) return
+        val current = _uiState.value.composerText
+        val merged = when {
+            current.isBlank() -> clean
+            current.endsWith(" ") || current.endsWith("\n") -> "$current$clean"
+            else -> "$current $clean"
+        }
+        onComposerTextChange(merged)
+    }
+
+    fun applyPromptTemplate(template: PromptTemplate) {
+        val nextText = PromptTemplateRepository.applyTemplateToComposer(
+            currentText = _uiState.value.composerText,
+            template = template,
+        )
+        onComposerTextChange(nextText)
+        if (template.autoSend && !_uiState.value.isActiveSessionBusy) {
+            sendMessage()
+        }
+    }
+
+    fun savePromptTemplate(template: PromptTemplate) {
+        viewModelScope.launch {
+            runCatching {
+                promptTemplateRepository.save(template)
+            }.onSuccess {
+                _toastMessages.tryEmit("Шаблон сохранён")
+            }.onFailure { err ->
+                _toastMessages.tryEmit(err.message ?: "Не удалось сохранить шаблон")
+            }
+        }
+    }
+
+    fun deletePromptTemplate(id: Long) {
+        viewModelScope.launch {
+            runCatching {
+                promptTemplateRepository.delete(id)
+            }.onSuccess {
+                _toastMessages.tryEmit("Шаблон удалён")
+            }.onFailure { err ->
+                _toastMessages.tryEmit(err.message ?: "Не удалось удалить шаблон")
+            }
+        }
+    }
+
+    fun attachImagesFromUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val currentCount = _uiState.value.attachedImages.size
+        val remainingSlots = (MAX_ATTACHED_IMAGES - currentCount).coerceAtLeast(0)
+        if (remainingSlots <= 0) {
+            _toastMessages.tryEmit("Можно прикрепить не более $MAX_ATTACHED_IMAGES изображений за раз")
+            return
+        }
+        val toProcess = uris.take(remainingSlots)
+        if (uris.size > remainingSlots) {
+            _toastMessages.tryEmit("Добавлены первые $remainingSlots из ${uris.size} (лимит $MAX_ATTACHED_IMAGES)")
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isProcessingImages = true) }
+            val added = mutableListOf<AttachedImageRef>()
+            for (uri in toProcess) {
+                runCatching {
+                    imageAttachmentProcessor.processImageUri(uri)
+                }.onSuccess { ref ->
+                    added.add(ref)
+                }.onFailure { err ->
+                    if (err is CancellationException) throw err
+                    _toastMessages.tryEmit(err.message ?: "Не удалось обработать изображение")
+                }
+            }
+            _uiState.update { state ->
+                state.copy(
+                    isProcessingImages = false,
+                    attachedImages = (state.attachedImages + added).take(MAX_ATTACHED_IMAGES),
+                )
+            }
+        }
+    }
+
+    fun removeAttachedImage(id: String) {
+        _uiState.update { state ->
+            state.copy(attachedImages = state.attachedImages.filterNot { it.id == id })
+        }
+    }
+
+    fun buildActiveSessionMarkdownExport(): String? {
+        val state = _uiState.value
+        if (state.messages.isEmpty()) return null
+        return ChatMarkdownExporter.exportSession(
+            sessionTitle = state.activeSession?.title.orEmpty(),
+            workspacePath = state.activeWorkspacePath,
+            messages = state.messages,
+        )
+    }
+
+    fun refreshGitBadge(directoryOverride: String? = null) {
+        val dir = (directoryOverride ?: _uiState.value.activeWorkspacePath).trim()
+        if (dir.isEmpty() || !_uiState.value.isConnected) {
+            _uiState.update { it.copy(activeGitBranch = null, activeGitDirtyCount = 0) }
+            return
+        }
+        gitBadgeJob?.cancel()
+        gitBadgeJob = viewModelScope.launch {
+            val summary = runCatching { gitRepository.loadSummary(dir) }.getOrNull()
+            if (summary != null && summary.isGitRepo) {
+                _uiState.update {
+                    it.copy(
+                        activeGitBranch = summary.branchName,
+                        activeGitDirtyCount = summary.totalDirtyCount,
+                    )
+                }
+            } else {
+                _uiState.update { it.copy(activeGitBranch = null, activeGitDirtyCount = 0) }
+            }
+        }
+    }
+
     fun selectModel(model: OpenCodeModel) {
         val shouldRetryWithNewModel = _uiState.value.pendingSwitchModelAndRetry
         _uiState.update {
@@ -696,7 +863,8 @@ class ChatViewModel(
         val state = _uiState.value
         val text = state.composerText.trim()
         val attachments = state.attachedFiles
-        if (text.isEmpty() && attachments.isEmpty()) return
+        val images = state.attachedImages
+        if (text.isEmpty() && attachments.isEmpty() && images.isEmpty()) return
 
         lastSentPromptText = text
         lastSentAttachments = attachments
@@ -708,12 +876,14 @@ class ChatViewModel(
                     isResponseStalled = false,
                     composerText = "",
                     attachedFiles = emptyList(),
+                    attachedImages = emptyList(),
                 )
             }
             preferencesRepository.setLastChatDraft("")
             dispatchPromptToServer(
                 text = text,
                 attachments = attachments,
+                imageAttachments = images,
                 providerId = state.selectedProviderId.takeIf { it.isNotBlank() },
                 modelId = state.selectedModelId.takeIf { it.isNotBlank() },
                 agent = state.selectedAgentName.takeIf { it.isNotBlank() },
@@ -742,6 +912,7 @@ class ChatViewModel(
         dispatchPromptToServer(
             text = promptText,
             attachments = attachments,
+            imageAttachments = emptyList(),
             providerId = providerId.takeIf { it.isNotBlank() },
             modelId = modelId.takeIf { it.isNotBlank() },
             agent = state.selectedAgentName.takeIf { it.isNotBlank() },
@@ -752,6 +923,7 @@ class ChatViewModel(
     private suspend fun dispatchPromptToServer(
         text: String,
         attachments: List<AttachedFileRef>,
+        imageAttachments: List<AttachedImageRef>,
         providerId: String?,
         modelId: String?,
         agent: String?,
@@ -780,6 +952,7 @@ class ChatViewModel(
                 providerId = providerId,
                 modelId = modelId,
                 agent = agent,
+                imageAttachments = imageAttachments,
             )
             _uiState.update { it.copy(isSending = false) }
             // Sync snapshot if SSE hasn't delivered the new user message yet
@@ -797,6 +970,7 @@ class ChatViewModel(
                     isResponseStalled = false,
                     composerText = if (restoreDraftOnFailure && it.composerText.isEmpty()) text else it.composerText,
                     attachedFiles = if (restoreDraftOnFailure && it.attachedFiles.isEmpty()) attachments else it.attachedFiles,
+                    attachedImages = if (restoreDraftOnFailure && it.attachedImages.isEmpty()) imageAttachments else it.attachedImages,
                 )
             }
             _uiState.value.activeSessionId?.let { markSessionBusy(it, busy = false) }
@@ -1023,6 +1197,7 @@ class ChatViewModel(
             startSseStream(connected.localTunnelPort)
             refreshAll()
         }
+        refreshGitBadge(normalized)
         _toastMessages.tryEmit("Рабочее пространство: $normalized")
     }
 
@@ -1046,6 +1221,7 @@ class ChatViewModel(
             if (saved.isNullOrBlank()) {
                 viewModelScope.launch { preferencesRepository.setActiveWorkspace(profileId, normalized) }
             }
+            refreshGitBadge(normalized)
         }
     }
 
@@ -1119,6 +1295,7 @@ class ChatViewModel(
                         sessionId = event.sessionId,
                         sessionTitle = previousSession?.title,
                     )
+                    refreshGitBadge()
                 }
                 if (event.sessionId == _uiState.value.activeSessionId) {
                     lastSessionEventAtMs = System.currentTimeMillis()
@@ -2782,11 +2959,13 @@ class ChatViewModel(
         cancelInactivityWatchdog()
         setupJob?.cancel()
         draftSaveJob?.cancel()
+        gitBadgeJob?.cancel()
         super.onCleared()
     }
 
     companion object {
         private const val INACTIVITY_WATCHDOG_MS = 60_000L
+        private const val MAX_ATTACHED_IMAGES = 4
     }
 
     class Factory(
@@ -2797,6 +2976,9 @@ class ChatViewModel(
         private val serverInstaller: OpenCodeServerInstaller,
         private val usageRepository: UsageRepository,
         private val agentNotificationHelper: AgentNotificationHelper,
+        private val promptTemplateRepository: PromptTemplateRepository,
+        private val gitRepository: GitRepository,
+        private val imageAttachmentProcessor: ImageAttachmentProcessor,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -2808,6 +2990,9 @@ class ChatViewModel(
                 serverInstaller = serverInstaller,
                 usageRepository = usageRepository,
                 agentNotificationHelper = agentNotificationHelper,
+                promptTemplateRepository = promptTemplateRepository,
+                gitRepository = gitRepository,
+                imageAttachmentProcessor = imageAttachmentProcessor,
             ) as T
         }
     }
