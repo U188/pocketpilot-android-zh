@@ -363,4 +363,27 @@ class SecurityAndUsageTest {
         assertTrue(csv.contains("2026-05-01,proxy,model-a,2,20000,10000"))
         assertFalse(csv.contains("/srv/app"))
     }
+
+    @Test
+    fun openCodeConfigHelper_parsesAuthFromEnvAndSystemdUnit() {
+        val envFile = """
+            # OpenCode server auth
+            OPENCODE_SERVER_USERNAME=admin
+            OPENCODE_SERVER_PASSWORD="my-secret-pass=123"
+        """.trimIndent()
+        val parsed = OpenCodeConfigHelper.parseOpenCodeAuthFromEnvText(envFile)
+        assertNotNull(parsed)
+        assertEquals("admin", parsed!!.first)
+        assertEquals("my-secret-pass=123", parsed.second)
+
+        val unitFile = """
+            [Service]
+            EnvironmentFile=-/etc/opencode-serve.env
+            Environment="OPENCODE_SERVER_PASSWORD=inline_pass"
+        """.trimIndent()
+        assertEquals(listOf("/etc/opencode-serve.env"), OpenCodeConfigHelper.extractEnvironmentFilePaths(unitFile))
+        val fromUnit = OpenCodeConfigHelper.parseOpenCodeAuthFromEnvText(unitFile)
+        assertEquals("opencode", fromUnit?.first)
+        assertEquals("inline_pass", fromUnit?.second)
+    }
 }

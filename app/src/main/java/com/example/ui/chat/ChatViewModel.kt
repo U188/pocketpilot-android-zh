@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppPreferencesRepository
 import com.example.data.opencode.OpenCodeApiClient
 import com.example.data.opencode.OpenCodeConfigHelper
+import com.example.data.opencode.OpenCodeHttpException
 import com.example.data.opencode.OpenCodeServerInstaller
 import com.example.data.opencode.ProviderApplyOutcome
 import com.example.data.repository.UsageRepository
@@ -69,6 +70,8 @@ data class ChatUiState(
     val isLoadingMessages: Boolean = false,
     val isSending: Boolean = false,
     val errorMessage: String? = null,
+    val isAuthRequired: Boolean = false,
+    val isSyncingAuth: Boolean = false,
     val providers: List<OpenCodeProvider> = emptyList(),
     val agents: List<OpenCodeAgent> = emptyList(),
     val selectedProviderId: String = "",
@@ -282,6 +285,8 @@ class ChatViewModel(
                                 isSending = false,
                                 isResponseStalled = false,
                                 pendingSwitchModelAndRetry = false,
+                                isAuthRequired = false,
+                                isSyncingAuth = false,
                                 pendingPermissions = emptyList(),
                                 sessionDiffs = emptyList(),
                                 setup = OpenCodeSetupUiState(),
@@ -307,30 +312,122 @@ class ChatViewModel(
     fun loadSessions() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingSessions = true, errorMessage = null) }
-            runCatching {
-                apiClient.listSessions()
-            }.onSuccess { sessions ->
-                _uiState.update { state ->
-                    val busyIds = state.sessions.filter { it.isBusy }.map { it.id }.toSet()
-                    val merged = sessions.map { s ->
-                        if (s.id in busyIds) s.copy(isBusy = true) else s
+            val initialAttempt = runCatching { apiClient.listSessions() }
+            if (initialAttempt.isSuccess) {
+                applyLoadedSessions(initialAttempt.getOrThrow())
+                return@launch
+            }
+
+            val err = initialAttempt.exceptionOrNull()!!
+            if (err is CancellationException) throw err
+
+            val isUnauthorized = isHttp401Error(err)
+            if (isUnauthorized) {
+                val connected = connectionManager.connectionState.value as? SshConnectionState.Connected
+                if (connected != null) {
+                    val env = _uiState.value.setup.envInfo
+                    val synced = runCatching {
+                        serverInstaller.syncOpenCodeServerAuthFromServer(
+                            profileId = connected.profile.id,
+                            homeDir = env.homeDir,
+                            isRoot = env.isRoot,
+                        )
+                    }.getOrNull()
+
+                    if (synced != null) {
+                        apiClient.invalidateDiscoveryCache()
+                        val retryAttempt = runCatching { apiClient.listSessions() }
+                        if (retryAttempt.isSuccess) {
+                            applyLoadedSessions(retryAttempt.getOrThrow())
+                            startSseStream(connected.localTunnelPort)
+                            loadProvidersAndAgents()
+                            loadPendingPermissions()
+                            _toastMessages.tryEmit("Пароль сервера OpenCode синхронизирован")
+                            return@launch
+                        }
                     }
-                    state.copy(
-                        sessions = merged,
-                        isLoadingSessions = false,
-                        errorMessage = null,
-                    )
                 }
-            }.onFailure { err ->
-                if (err is CancellationException) throw err
+
                 _uiState.update {
                     it.copy(
                         isLoadingSessions = false,
-                        errorMessage = err.message ?: "Не удалось подключиться к OpenCode API",
+                        isAuthRequired = true,
+                        errorMessage = "Сервер OpenCode требует пароль (HTTP 401). Синхронизируйте пароль с сервера или введите его вручную.",
                     )
                 }
+                return@launch
+            }
+
+            _uiState.update {
+                it.copy(
+                    isLoadingSessions = false,
+                    isAuthRequired = false,
+                    errorMessage = err.message ?: "Не удалось подключиться к OpenCode API",
+                )
             }
         }
+    }
+
+    private fun applyLoadedSessions(sessions: List<OpenCodeSession>) {
+        _uiState.update { state ->
+            val busyIds = state.sessions.filter { it.isBusy }.map { it.id }.toSet()
+            val merged = sessions.map { s ->
+                if (s.id in busyIds) s.copy(isBusy = true) else s
+            }
+            state.copy(
+                sessions = merged,
+                isLoadingSessions = false,
+                isAuthRequired = false,
+                isSyncingAuth = false,
+                errorMessage = null,
+            )
+        }
+    }
+
+    private fun isHttp401Error(err: Throwable): Boolean {
+        if (err is OpenCodeHttpException && err.statusCode == 401) return true
+        val msg = err.message.orEmpty()
+        return msg.contains("HTTP 401", ignoreCase = true) ||
+            msg.contains("401 Unauthorized", ignoreCase = true)
+    }
+
+    fun syncOpenCodeAuthAndRetry() {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncingAuth = true) }
+            val env = _uiState.value.setup.envInfo
+            val synced = runCatching {
+                serverInstaller.syncOpenCodeServerAuthFromServer(
+                    profileId = connected.profile.id,
+                    homeDir = env.homeDir,
+                    isRoot = env.isRoot,
+                )
+            }.getOrNull()
+            _uiState.update { it.copy(isSyncingAuth = false) }
+            if (synced != null) {
+                apiClient.invalidateDiscoveryCache()
+                startSseStream(connected.localTunnelPort)
+                refreshAll()
+                _toastMessages.tryEmit("Пароль сервера OpenCode синхронизирован")
+            } else {
+                _toastMessages.tryEmit("Не удалось автоматически найти пароль на сервере — введите его вручную")
+            }
+        }
+    }
+
+    fun saveManualOpenCodeAuth(username: String, password: String) {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        if (password.isEmpty()) return
+        serverInstaller.saveManualOpenCodeServerAuth(
+            profileId = connected.profile.id,
+            username = username,
+            password = password,
+        )
+        apiClient.invalidateDiscoveryCache()
+        _uiState.update { it.copy(isAuthRequired = false, errorMessage = null) }
+        startSseStream(connected.localTunnelPort)
+        refreshAll()
+        _toastMessages.tryEmit("Пароль сервера OpenCode сохранён в Keystore")
     }
 
     private fun loadProvidersAndAgents() {

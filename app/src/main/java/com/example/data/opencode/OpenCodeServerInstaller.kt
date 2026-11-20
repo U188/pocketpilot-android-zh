@@ -45,6 +45,7 @@ private data class SessionProbeResult(
     val alive: Boolean,
     val isConnectionError: Boolean,
     val detail: String,
+    val httpCode: Int = 0,
 )
 
 class OpenCodeServerInstaller(
@@ -72,9 +73,28 @@ class OpenCodeServerInstaller(
         localTunnelPort: Int?,
     ): Pair<OpenCodeServerStatus, OpenCodeEnvInfo> = withContext(Dispatchers.IO) {
         val env = inspectEnvironment(openCodePort = openCodePort, requireSystemd = false, onLog = null)
-        val auth = profileId?.let { secretStore?.getOpenCodeServerAuth(it) }
-        val tunnelSessionOk = localTunnelPort != null &&
-            probeTunnelSessionJson(localTunnelPort, auth, treat401AsAlive = true).alive
+        var auth = profileId?.let { secretStore?.getOpenCodeServerAuth(it) }
+        var probe = if (localTunnelPort != null) {
+            probeTunnelSessionJson(localTunnelPort, auth, treat401AsAlive = true)
+        } else {
+            null
+        }
+
+        // If OpenCode responds with HTTP 401 (e.g. after reinstall, profile recreation, or key mismatch),
+        // automatically recover OPENCODE_SERVER_PASSWORD from the server's systemd env file over SSH/SFTP.
+        if (probe?.httpCode == 401 && profileId != null) {
+            val synced = syncOpenCodeServerAuthFromServer(
+                profileId = profileId,
+                homeDir = env.homeDir,
+                isRoot = env.isRoot,
+            )
+            if (synced != null && localTunnelPort != null) {
+                auth = synced
+                probe = probeTunnelSessionJson(localTunnelPort, auth, treat401AsAlive = true)
+            }
+        }
+
+        val tunnelSessionOk = probe?.alive == true
         val serviceActive = env.serviceState == SystemdServiceState.ACTIVE
 
         val status = when {
@@ -89,6 +109,134 @@ class OpenCodeServerInstaller(
                 OpenCodeServerStatus.NOT_INSTALLED
         }
         status to env
+    }
+
+    /**
+     * Reads OPENCODE_SERVER_USERNAME / OPENCODE_SERVER_PASSWORD from the connected SSH server's
+     * systemd environment file (or unit file / process environ) and saves it to Android Keystore.
+     * Never logs or returns secrets in diagnostic output.
+     */
+    suspend fun syncOpenCodeServerAuthFromServer(
+        profileId: Long,
+        homeDir: String? = null,
+        isRoot: Boolean? = null,
+    ): com.example.data.local.OpenCodeServerAuth? = withContext(Dispatchers.IO) {
+        val cleanHome = homeDir?.trim()?.takeIf { it.isNotBlank() }
+            ?: runCatching {
+                execStreaming("bash -lc 'printf %s \"\$HOME\"'", timeoutSec = 8, onLine = null).output.trim()
+            }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: "/root"
+
+        val effectiveRoot = isRoot ?: (cleanHome == "/root")
+
+        val unitPaths = listOf(
+            "/etc/systemd/system/opencode-serve.service",
+            "$cleanHome/.config/systemd/user/opencode-serve.service",
+        )
+        val envPaths = linkedSetOf(
+            "/etc/opencode-serve.env",
+            "$cleanHome/.config/opencode/opencode-serve.env",
+        )
+
+        // Check systemd unit files first for custom EnvironmentFile= or inline Environment=
+        var parsedAuth: Pair<String, String>? = null
+        for (unitPath in unitPaths) {
+            val unitText = readRemoteSmallFile(unitPath, allowSudo = !effectiveRoot) ?: continue
+            OpenCodeConfigHelper.extractEnvironmentFilePaths(unitText).forEach { envPaths.add(it) }
+            if (parsedAuth == null) {
+                parsedAuth = OpenCodeConfigHelper.parseOpenCodeAuthFromEnvText(unitText)
+            }
+        }
+
+        // Check candidate env files
+        for (envPath in envPaths) {
+            val envText = readRemoteSmallFile(envPath, allowSudo = !effectiveRoot) ?: continue
+            val candidate = OpenCodeConfigHelper.parseOpenCodeAuthFromEnvText(envText)
+            if (candidate != null) {
+                parsedAuth = candidate
+                break
+            }
+        }
+
+        // Last resort: inspect running opencode-serve process environment (works when env was injected externally)
+        if (parsedAuth == null) {
+            val procCmd = buildString {
+                val sudoPrefix = if (effectiveRoot) "" else "sudo -n "
+                append("bash -lc '")
+                append("PID=$(systemctl show -p MainPID --value opencode-serve 2>/dev/null || systemctl --user show -p MainPID --value opencode-serve 2>/dev/null || true); ")
+                append("if [ -z \"\$PID\" ] || [ \"\$PID\" = \"0\" ]; then PID=$(pgrep -f \"opencode.*serve\" | head -n 1 || true); fi; ")
+                append("if [ -n \"\$PID\" ] && [ -r \"/proc/\$PID/environ\" ]; then tr \"\\0\" \"\\n\" < \"/proc/\$PID/environ\" | grep -E \"^OPENCODE_SERVER_(USERNAME|PASSWORD)=\" || true; ")
+                append("elif [ -n \"\$PID\" ] && [ \"$sudoPrefix\" != \"\" ]; then ${sudoPrefix}tr \"\\0\" \"\\n\" < \"/proc/\$PID/environ\" 2>/dev/null | grep -E \"^OPENCODE_SERVER_(USERNAME|PASSWORD)=\" || true; fi")
+                append("'")
+            }
+            val procOut = runCatching {
+                execRawSilent(procCmd, timeoutSec = 10).output
+            }.getOrNull()
+            parsedAuth = OpenCodeConfigHelper.parseOpenCodeAuthFromEnvText(procOut)
+        }
+
+        val (username, password) = parsedAuth ?: return@withContext null
+        secretStore?.saveOpenCodeServerAuth(profileId, username, password)
+        com.example.data.local.OpenCodeServerAuth(username = username, password = password)
+    }
+
+    fun saveManualOpenCodeServerAuth(
+        profileId: Long,
+        username: String,
+        password: String,
+    ) {
+        secretStore?.saveOpenCodeServerAuth(
+            profileId = profileId,
+            username = username.trim().ifBlank { OpenCodeConfigHelper.DEFAULT_AUTH_USERNAME },
+            password = password,
+        )
+    }
+
+    private suspend fun readRemoteSmallFile(
+        path: String,
+        allowSudo: Boolean,
+    ): String? {
+        val viaSftp = runCatching {
+            sftpRepository.readTextFile(path).text
+        }.getOrNull()
+        if (!viaSftp.isNullOrBlank()) return viaSftp
+
+        if (allowSudo) {
+            val res = runCatching {
+                execRawSilent("sudo -n cat ${shellQuote(path)} 2>/dev/null", timeoutSec = 8)
+            }.getOrNull()
+            if (res != null && res.exitCode == 0 && res.output.isNotBlank()) {
+                return res.output
+            }
+        }
+        return null
+    }
+
+    /**
+     * Executes a silent SSH command without emitting or sanitizing logs.
+     * Used strictly for internal secret sync (never exposed to UI or logs).
+     */
+    private suspend fun execRawSilent(
+        command: String,
+        timeoutSec: Long,
+    ): SshExecResult = withContext(Dispatchers.IO) {
+        val client = connectionManager.getActiveSshClient()
+            ?: throw IllegalStateException("SSH-соединение не активно")
+
+        val outputBuilder = StringBuilder()
+        var exitCode = -1
+        client.startSession().use { session ->
+            val cmd = session.exec(command)
+            val stdoutReader = BufferedReader(InputStreamReader(cmd.inputStream, StandardCharsets.UTF_8))
+            var line: String? = stdoutReader.readLine()
+            while (line != null) {
+                outputBuilder.appendLine(line)
+                line = stdoutReader.readLine()
+            }
+            cmd.join(timeoutSec, TimeUnit.SECONDS)
+            exitCode = cmd.exitStatus ?: -1
+        }
+        SshExecResult(exitCode = exitCode, output = outputBuilder.toString())
     }
 
     suspend fun inspectEnvironment(
@@ -1004,6 +1152,7 @@ class OpenCodeServerInstaller(
                     } else {
                         "HTTP 401 (требуется Basic Auth)"
                     },
+                    httpCode = 401,
                 )
             }
             if (resp.code !in 200..299) {
@@ -1011,6 +1160,7 @@ class OpenCodeServerInstaller(
                     alive = false,
                     isConnectionError = false,
                     detail = "HTTP ${resp.code}",
+                    httpCode = resp.code,
                 )
             }
             val isJson = (body.startsWith("[") && runCatching { JSONArray(body) }.isSuccess) ||
@@ -1021,12 +1171,14 @@ class OpenCodeServerInstaller(
                     alive = true,
                     isConnectionError = false,
                     detail = "HTTP ${resp.code} JSON$authNote",
+                    httpCode = resp.code,
                 )
             } else {
                 SessionProbeResult(
                     alive = false,
                     isConnectionError = false,
                     detail = "Ответ не является JSON",
+                    httpCode = resp.code,
                 )
             }
         }

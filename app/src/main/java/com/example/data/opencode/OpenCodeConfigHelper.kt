@@ -156,6 +156,73 @@ object OpenCodeConfigHelper {
     }
 
     /**
+     * Parses OPENCODE_SERVER_USERNAME and OPENCODE_SERVER_PASSWORD from an env file
+     * (e.g. /etc/opencode-serve.env), systemd Environment= lines, or shell export lines.
+     * Returns (username, password) when a non-empty password is found, or null otherwise.
+     */
+    fun parseOpenCodeAuthFromEnvText(raw: String?): Pair<String, String>? {
+        if (raw.isNullOrBlank()) return null
+        var username = DEFAULT_AUTH_USERNAME
+        var password: String? = null
+
+        for (rawLine in raw.lineSequence()) {
+            var line = rawLine.trim()
+            if (line.isEmpty() || line.startsWith("#")) continue
+
+            // Handle systemd Environment="OPENCODE_SERVER_PASSWORD=..." or Environment=OPENCODE_SERVER_PASSWORD=...
+            if (line.startsWith("Environment=", ignoreCase = true)) {
+                line = line.substringAfter('=').trim()
+                line = stripSurroundingQuotes(line)
+            }
+            if (line.startsWith("export ")) {
+                line = line.removePrefix("export ").trim()
+            }
+
+            val eqIdx = line.indexOf('=')
+            if (eqIdx <= 0) continue
+            val key = line.substring(0, eqIdx).trim()
+            val value = stripSurroundingQuotes(line.substring(eqIdx + 1).trim())
+
+            when (key) {
+                "OPENCODE_SERVER_USERNAME" -> if (value.isNotBlank()) username = value
+                "OPENCODE_SERVER_PASSWORD" -> if (value.isNotEmpty()) password = value
+            }
+        }
+
+        val resolvedPass = password?.takeIf { it.isNotEmpty() && it != "[REDACTED]" } ?: return null
+        return username.ifBlank { DEFAULT_AUTH_USERNAME } to resolvedPass
+    }
+
+    /**
+     * Extracts EnvironmentFile paths from a systemd unit file (stripping leading '-' optional prefix).
+     */
+    fun extractEnvironmentFilePaths(unitText: String?): List<String> {
+        if (unitText.isNullOrBlank()) return emptyList()
+        return unitText.lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("EnvironmentFile=", ignoreCase = true) }
+            .map { line ->
+                stripSurroundingQuotes(line.substringAfter('=').trim())
+                    .removePrefix("-")
+                    .trim()
+            }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+    }
+
+    private fun stripSurroundingQuotes(value: String): String {
+        if (value.length >= 2) {
+            if ((value.startsWith("\"") && value.endsWith("\"")) ||
+                (value.startsWith("'") && value.endsWith("'"))
+            ) {
+                return value.substring(1, value.length - 1)
+            }
+        }
+        return value
+    }
+
+    /**
      * Masks an API key for display: shows only "••••" + last 4 characters.
      */
     fun maskApiKey(rawKey: String?): String? {

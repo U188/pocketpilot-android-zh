@@ -665,4 +665,13 @@
     <string name="notif_agent_finished_body_default">Агент завершил задачу — нажмите, чтобы открыть чат.</string>
     <string name="notif_agent_permission_title">Нужно разрешение агента</string>
     <string name="notif_agent_permission_body">Запрос подтверждения: %1$s</string>
+
+    <!-- OpenCode HTTP 401 Auth Recovery -->
+    <string name="chat_auth_401_title">Требуется авторизация OpenCode</string>
+    <string name="chat_auth_sync_from_server">Синхронизировать пароль с сервера</string>
+    <string name="chat_auth_enter_manually">Ввести пароль вручную</string>
+    <string name="chat_auth_dialog_title">Пароль сервера OpenCode</string>
+    <string name="chat_auth_dialog_desc">Укажите логин и пароль Basic Auth (OPENCODE_SERVER_USERNAME / OPENCODE_SERVER_PASSWORD). Данные будут сохранены в Android Keystore.</string>
+    <string name="chat_auth_username_label">Логин</string>
+    <string name="chat_auth_password_label">Пароль</string>
 </resources>

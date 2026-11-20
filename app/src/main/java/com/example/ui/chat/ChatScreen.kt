@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.CallSplit
@@ -51,13 +52,19 @@ import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.HourglassTop
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -79,6 +86,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -92,6 +100,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -135,6 +146,7 @@ fun ChatScreen(
     var renameTarget by remember { mutableStateOf<OpenCodeSession?>(null) }
     var deleteTarget by remember { mutableStateOf<OpenCodeSession?>(null) }
     var revertTargetMessageId by remember { mutableStateOf<String?>(null) }
+    var showOpenCodeAuthDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.toastMessages.collect { msg ->
@@ -268,6 +280,8 @@ fun ChatScreen(
                         uiState = uiState,
                         onCreateSession = { viewModel.createSession() },
                         onRefresh = viewModel::refreshAll,
+                        onSyncServerAuth = viewModel::syncOpenCodeAuthAndRetry,
+                        onEnterServerAuth = { showOpenCodeAuthDialog = true },
                         onOpenSession = viewModel::openSession,
                         onRenameSession = { renameTarget = it },
                         onForkSession = { viewModel.forkSession(it.id) },
@@ -472,6 +486,16 @@ fun ChatScreen(
             onDismiss = { revertTargetMessageId = null },
         )
     }
+
+    if (showOpenCodeAuthDialog) {
+        OpenCodeServerAuthDialog(
+            onSave = { username, password ->
+                showOpenCodeAuthDialog = false
+                viewModel.saveManualOpenCodeAuth(username, password)
+            },
+            onDismiss = { showOpenCodeAuthDialog = false },
+        )
+    }
 }
 
 @Composable
@@ -529,6 +553,8 @@ private fun SessionsListPane(
     uiState: ChatUiState,
     onCreateSession: () -> Unit,
     onRefresh: () -> Unit,
+    onSyncServerAuth: () -> Unit,
+    onEnterServerAuth: () -> Unit,
     onOpenSession: (String) -> Unit,
     onRenameSession: (OpenCodeSession) -> Unit,
     onForkSession: (OpenCodeSession) -> Unit,
@@ -597,17 +623,91 @@ private fun SessionsListPane(
                         .padding(24.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Text(
-                            text = uiState.errorMessage,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                        FilledTonalButton(onClick = onRefresh) {
-                            Text(stringResource(R.string.action_refresh))
+                    if (uiState.isAuthRequired) {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("chat_auth_required_card"),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Lock,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(32.dp),
+                                )
+                                Text(
+                                    text = stringResource(R.string.chat_auth_401_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    text = uiState.errorMessage,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Button(
+                                    onClick = onSyncServerAuth,
+                                    enabled = !uiState.isSyncingAuth,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("chat_auth_sync_button"),
+                                ) {
+                                    if (uiState.isSyncingAuth) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.onPrimary,
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Sync,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+                                    Text(stringResource(R.string.chat_auth_sync_from_server))
+                                }
+                                OutlinedButton(
+                                    onClick = onEnterServerAuth,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("chat_auth_manual_button"),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Key,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(stringResource(R.string.chat_auth_enter_manually))
+                                }
+                                TextButton(onClick = onRefresh) {
+                                    Text(stringResource(R.string.action_refresh))
+                                }
+                            }
+                        }
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Text(
+                                text = uiState.errorMessage,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            FilledTonalButton(onClick = onRefresh) {
+                                Text(stringResource(R.string.action_refresh))
+                            }
                         }
                     }
                 }
@@ -1660,6 +1760,88 @@ private fun ResponseStalledCard(
             }
         }
     }
+}
+
+@Composable
+private fun OpenCodeServerAuthDialog(
+    onSave: (username: String, password: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var username by remember { mutableStateOf("opencode") }
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Rounded.Lock,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
+        title = {
+            Text(text = stringResource(R.string.chat_auth_dialog_title))
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .imePadding(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.chat_auth_dialog_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text(stringResource(R.string.chat_auth_username_label)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("chat_auth_username_input"),
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text(stringResource(R.string.chat_auth_password_label)) },
+                    singleLine = true,
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton(onClick = { showPassword = !showPassword }) {
+                            Icon(
+                                imageVector = if (showPassword) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                contentDescription = stringResource(
+                                    if (showPassword) R.string.backup_hide_password else R.string.backup_show_password,
+                                ),
+                            )
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("chat_auth_password_input"),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(username, password) },
+                enabled = password.isNotEmpty(),
+                modifier = Modifier.testTag("chat_auth_save_button"),
+            ) {
+                Text(text = stringResource(R.string.action_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(R.string.action_cancel))
+            }
+        },
+    )
 }
 
 private fun copyPlainTextToClipboard(context: Context, label: String, text: String) {

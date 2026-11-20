@@ -36,6 +36,11 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
 
+class OpenCodeHttpException(
+    val statusCode: Int,
+    message: String,
+) : IllegalStateException(message)
+
 class OpenCodeApiClient(
     private val connectionManager: SshConnectionManager,
     private val secretStore: KeystoreSecretStore? = null,
@@ -492,8 +497,9 @@ class OpenCodeApiClient(
                     obj.optString("message").takeIf { it.isNotBlank() }
                         ?: obj.optString("error").takeIf { it.isNotBlank() }
                 }.getOrNull()
-                throw IllegalStateException(
-                    parsedError ?: "OpenCode API ошибка HTTP ${response.code}",
+                throw OpenCodeHttpException(
+                    statusCode = response.code,
+                    message = parsedError ?: "OpenCode API ошибка HTTP ${response.code}",
                 )
             }
             return responseBody
