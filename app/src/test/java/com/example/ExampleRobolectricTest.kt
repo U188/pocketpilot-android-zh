@@ -681,4 +681,102 @@ class ExampleRobolectricTest {
         assertEquals("512 Б", com.example.data.update.AppUpdateManager.formatBytes(512L))
         assertEquals("1.5 МБ", com.example.data.update.AppUpdateManager.formatBytes((1.5 * 1024 * 1024).toLong()))
     }
+
+    @Test
+    fun `openapi discovery detects directory query param and header while sse parses session errors and completed timestamps`() {
+        val openApiJson = """
+            {
+              "paths": {
+                "/session": {
+                  "get": {
+                    "parameters": [
+                      {"name": "directory", "in": "query"},
+                      {"name": "x-opencode-directory", "in": "header"}
+                    ]
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val paths = OpenCodeJsonParser.parseOpenApiDoc(openApiJson)
+        assertEquals("directory", paths.directoryQueryParamName)
+        assertEquals("x-opencode-directory", paths.directoryHeaderName)
+
+        val msgWithObjError = OpenCodeJsonParser.parseMessageInfo(
+            org.json.JSONObject(
+                """
+                {
+                  "id": "msg_1",
+                  "sessionID": "ses_1",
+                  "role": "assistant",
+                  "time": { "created": 1700000000000, "completed": 1700000014500 },
+                  "error": { "name": "ProviderAuthError", "data": { "message": "Invalid API key" } }
+                }
+                """.trimIndent(),
+            ),
+        )
+        assertEquals(1700000014500L, msgWithObjError?.completedAtMillis)
+        assertEquals("ProviderAuthError: Invalid API key", msgWithObjError?.error)
+
+        val msgWithStringError = OpenCodeJsonParser.parseMessageInfo(
+            org.json.JSONObject(
+                """
+                {
+                  "id": "msg_2",
+                  "sessionID": "ses_1",
+                  "role": "assistant",
+                  "error": "Model rate limit exceeded"
+                }
+                """.trimIndent(),
+            ),
+        )
+        assertEquals("Model rate limit exceeded", msgWithStringError?.error)
+
+        val sessionError = OpenCodeJsonParser.parseSseEvent(
+            """
+            {
+              "type": "session.error",
+              "properties": {
+                "sessionID": "ses_1",
+                "error": { "name": "APIError", "data": { "message": "Gateway timeout" } }
+              }
+            }
+            """.trimIndent(),
+        ) as OpenCodeEvent.SessionError
+        assertEquals("ses_1", sessionError.sessionId)
+        assertEquals("APIError: Gateway timeout", sessionError.message)
+    }
+
+    @Test
+    fun `chat time formatter formats local timestamps durations and copyable message text`() {
+        val zone = java.time.ZoneId.of("UTC")
+        val now = java.time.ZonedDateTime.of(2025, 5, 10, 15, 30, 0, 0, zone).toInstant().toEpochMilli()
+        val sameDay = java.time.ZonedDateTime.of(2025, 5, 10, 9, 5, 0, 0, zone).toInstant().toEpochMilli()
+        val otherDay = java.time.ZonedDateTime.of(2025, 5, 8, 21, 45, 0, 0, zone).toInstant().toEpochMilli()
+        val prevYear = java.time.ZonedDateTime.of(2024, 12, 31, 23, 59, 0, 0, zone).toInstant().toEpochMilli()
+
+        assertEquals("09:05", com.example.ui.chat.ChatTimeFormatter.formatMessageTimestamp(sameDay, now, zone))
+        assertEquals("08.05 21:45", com.example.ui.chat.ChatTimeFormatter.formatMessageTimestamp(otherDay, now, zone))
+        assertEquals("31.12.2024 23:59", com.example.ui.chat.ChatTimeFormatter.formatMessageTimestamp(prevYear, now, zone))
+
+        assertEquals("за 14 с", com.example.ui.chat.ChatTimeFormatter.formatGenerationDuration(1000L, 15_000L))
+        assertEquals("за 1 мин 12 с", com.example.ui.chat.ChatTimeFormatter.formatGenerationDuration(1000L, 73_000L))
+        assertEquals("за 2 мин", com.example.ui.chat.ChatTimeFormatter.formatGenerationDuration(1000L, 121_000L))
+
+        val assistantMsg = com.example.domain.model.OpenCodeMessage(
+            id = "m1",
+            sessionId = "s1",
+            role = "assistant",
+            createdAtMillis = 10_000L,
+            completedAtMillis = 24_000L,
+            parts = listOf(
+                OpenCodePart.Text(id = "p1", messageId = "m1", sessionId = "s1", text = "Привет, мир"),
+            ),
+            error = "Предупреждение",
+        )
+        assertEquals("за 14 с", com.example.ui.chat.ChatTimeFormatter.resolveAssistantDuration(assistantMsg, 5_000L))
+        val copied = com.example.ui.chat.ChatTimeFormatter.buildCopyableMessageText(assistantMsg)
+        assertTrue(copied.contains("Привет, мир"))
+        assertTrue(copied.contains("Ошибка: Предупреждение"))
+    }
 }

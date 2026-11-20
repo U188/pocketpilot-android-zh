@@ -14,6 +14,8 @@ import com.example.domain.model.AppSettings
 import com.example.domain.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
 
 private val Context.appSettingsDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "opencode_preferences",
@@ -45,6 +47,8 @@ class AppPreferencesRepository(context: Context) {
             lastChatDraft = prefs[KEY_LAST_CHAT_DRAFT].orEmpty(),
             autoCheckUpdates = prefs[KEY_AUTO_CHECK_UPDATES] ?: true,
             lastUpdateCheckEpochMs = prefs[KEY_LAST_UPDATE_CHECK_MS] ?: 0L,
+            activeWorkspaceByProfile = parseWorkspaceHistory(prefs[KEY_WORKSPACE_HISTORY_JSON]).first,
+            recentWorkspacesByProfile = parseWorkspaceHistory(prefs[KEY_WORKSPACE_HISTORY_JSON]).second,
         )
     }
 
@@ -129,7 +133,69 @@ class AppPreferencesRepository(context: Context) {
         dataStore.edit { it[KEY_LAST_UPDATE_CHECK_MS] = epochMs.coerceAtLeast(0L) }
     }
 
+    suspend fun setActiveWorkspace(profileId: Long, path: String) {
+        val cleanPath = path.trim().ifEmpty { return }
+        dataStore.edit { prefs ->
+            val root = runCatching {
+                JSONObject(prefs[KEY_WORKSPACE_HISTORY_JSON].orEmpty())
+            }.getOrElse { JSONObject() }
+
+            val key = profileId.toString()
+            val entry = root.optJSONObject(key) ?: JSONObject()
+            entry.put("active", cleanPath)
+
+            val recentArr = entry.optJSONArray("recent") ?: JSONArray()
+            val updatedRecent = buildList {
+                add(cleanPath)
+                for (i in 0 until recentArr.length()) {
+                    val item = recentArr.optString(i).trim()
+                    if (item.isNotEmpty() && item != cleanPath && size < MAX_RECENT_WORKSPACES) {
+                        add(item)
+                    }
+                }
+            }
+            val newRecentArr = JSONArray()
+            updatedRecent.forEach { newRecentArr.put(it) }
+            entry.put("recent", newRecentArr)
+            root.put(key, entry)
+            prefs[KEY_WORKSPACE_HISTORY_JSON] = root.toString()
+        }
+    }
+
+    private fun parseWorkspaceHistory(raw: String?): Pair<Map<Long, String>, Map<Long, List<String>>> {
+        if (raw.isNullOrBlank()) return emptyMap<Long, String>() to emptyMap()
+        return runCatching {
+            val root = JSONObject(raw)
+            val activeMap = LinkedHashMap<Long, String>()
+            val recentMap = LinkedHashMap<Long, List<String>>()
+            val iter = root.keys()
+            while (iter.hasNext()) {
+                val key = iter.next()
+                val profileId = key.toLongOrNull() ?: continue
+                val obj = root.optJSONObject(key) ?: continue
+                val active = obj.optString("active").trim()
+                if (active.isNotEmpty()) {
+                    activeMap[profileId] = active
+                }
+                val arr = obj.optJSONArray("recent")
+                if (arr != null) {
+                    val list = buildList {
+                        for (i in 0 until arr.length()) {
+                            val item = arr.optString(i).trim()
+                            if (item.isNotEmpty() && item !in this) add(item)
+                        }
+                    }
+                    if (list.isNotEmpty()) {
+                        recentMap[profileId] = list
+                    }
+                }
+            }
+            activeMap to recentMap
+        }.getOrElse { emptyMap<Long, String>() to emptyMap() }
+    }
+
     companion object {
+        private const val MAX_RECENT_WORKSPACES = 8
         private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
         private val KEY_DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         private val KEY_LAST_ACTIVE_PROFILE_ID = longPreferencesKey("last_active_profile_id")
@@ -147,5 +213,6 @@ class AppPreferencesRepository(context: Context) {
         private val KEY_LAST_CHAT_DRAFT = stringPreferencesKey("last_chat_draft")
         private val KEY_AUTO_CHECK_UPDATES = booleanPreferencesKey("auto_check_updates")
         private val KEY_LAST_UPDATE_CHECK_MS = longPreferencesKey("last_update_check_ms")
+        private val KEY_WORKSPACE_HISTORY_JSON = stringPreferencesKey("workspace_history_json")
     }
 }

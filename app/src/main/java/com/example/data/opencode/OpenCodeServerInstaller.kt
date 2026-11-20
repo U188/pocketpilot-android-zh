@@ -27,6 +27,26 @@ data class SshExecResult(
     val output: String,
 )
 
+data class ServiceRestartCheckResult(
+    val serviceActive: Boolean,
+    val isUserService: Boolean,
+    val stateText: String,
+    val detail: String,
+)
+
+data class ServerReadyCheckResult(
+    val serviceActive: Boolean,
+    val serverAlive: Boolean,
+    val detail: String,
+    val activeTunnelPort: Int?,
+)
+
+private data class SessionProbeResult(
+    val alive: Boolean,
+    val isConnectionError: Boolean,
+    val detail: String,
+)
+
 class OpenCodeServerInstaller(
     private val connectionManager: SshConnectionManager,
     private val sftpRepository: SftpRepository,
@@ -53,7 +73,8 @@ class OpenCodeServerInstaller(
     ): Pair<OpenCodeServerStatus, OpenCodeEnvInfo> = withContext(Dispatchers.IO) {
         val env = inspectEnvironment(openCodePort = openCodePort, requireSystemd = false, onLog = null)
         val auth = profileId?.let { secretStore?.getOpenCodeServerAuth(it) }
-        val tunnelSessionOk = localTunnelPort != null && probeTunnelSessionJson(localTunnelPort, auth).first
+        val tunnelSessionOk = localTunnelPort != null &&
+            probeTunnelSessionJson(localTunnelPort, auth, treat401AsAlive = true).alive
         val serviceActive = env.serviceState == SystemdServiceState.ACTIVE
 
         val status = when {
@@ -524,15 +545,192 @@ class OpenCodeServerInstaller(
         if (res.exitCode != 0) {
             throw IllegalStateException("Не удалось перезапустить opencode-serve (код ${res.exitCode})")
         }
-        verifyInstallation(
+        val ready = waitForServerReadyAfterRestart(
             profileId = profileId,
-            env = env,
             isUserService = env.isUserService,
-            port = port,
-            localTunnelPort = localTunnelPort,
-            verifyPersistence = false,
-            onLog = onLog,
+            initialTunnelPort = localTunnelPort,
+            onProgress = onLog,
         )
+        if (!ready.serviceActive) {
+            throw IllegalStateException("Служба opencode-serve не перешла в active: ${ready.detail}")
+        }
+        if (!ready.serverAlive) {
+            throw IllegalStateException("Сервер OpenCode не ответил на /session за 40 с: ${ready.detail}")
+        }
+    }
+
+    /**
+     * Restarts systemd service opencode-serve and checks whether it transitions to `active`.
+     * Does NOT check HTTP /session — callers use waitForServerReadyAfterRestart() for the 40s HTTP polling.
+     */
+    suspend fun restartServiceAndCheckActive(
+        port: Int,
+        onLog: ((String) -> Unit)? = null,
+    ): ServiceRestartCheckResult = withContext(Dispatchers.IO) {
+        val env = inspectEnvironment(openCodePort = port, requireSystemd = true)
+        if (!env.hasPersistentUnit) {
+            throw IllegalStateException("Постоянная служба opencode-serve не установлена. Используйте «Починить» для создания службы.")
+        }
+        val cmd = buildSystemctlCommand(env, env.isUserService, "restart")
+        onLog?.invoke("$ $cmd")
+        val res = execStreaming(cmd, timeoutSec = 30, onLine = onLog)
+        if (res.exitCode != 0) {
+            return@withContext ServiceRestartCheckResult(
+                serviceActive = false,
+                isUserService = env.isUserService,
+                stateText = "error(${res.exitCode})",
+                detail = "systemctl restart завершился с кодом ${res.exitCode}",
+            )
+        }
+
+        // Wait up to 6 seconds for activating -> active
+        var stateText = "unknown"
+        repeat(4) { idx ->
+            stateText = querySystemdActiveState(env.isUserService)
+            if (stateText == "active") {
+                return@withContext ServiceRestartCheckResult(
+                    serviceActive = true,
+                    isUserService = env.isUserService,
+                    stateText = stateText,
+                    detail = "Служба opencode-serve активна (active)",
+                )
+            }
+            if (stateText == "failed" || stateText == "inactive") {
+                return@withContext ServiceRestartCheckResult(
+                    serviceActive = false,
+                    isUserService = env.isUserService,
+                    stateText = stateText,
+                    detail = "Служба opencode-serve в состоянии $stateText после перезапуска",
+                )
+            }
+            if (idx < 3) delay(1_500L)
+        }
+
+        ServiceRestartCheckResult(
+            serviceActive = stateText == "active",
+            isUserService = env.isUserService,
+            stateText = stateText,
+            detail = "Служба opencode-serve не перешла в active (статус: $stateText)",
+        )
+    }
+
+    /**
+     * Waits for OpenCode HTTP server in a loop: every 2 seconds for 40 seconds total (20 attempts).
+     * - Sends GET /session with Basic Auth if enabled in Keystore.
+     * - Treats HTTP 2xx JSON AND HTTP 401 as server alive.
+     * - Recreates SSH tunnel on connection drops and retries.
+     * - Detects if systemd service crashed (not active) during startup.
+     */
+    suspend fun waitForServerReadyAfterRestart(
+        profileId: Long?,
+        isUserService: Boolean?,
+        initialTunnelPort: Int?,
+        onProgress: ((String) -> Unit)? = null,
+    ): ServerReadyCheckResult = withContext(Dispatchers.IO) {
+        val auth = profileId?.let { secretStore?.getOpenCodeServerAuth(it) }
+        var tunnelPort = initialTunnelPort ?: connectionManager.getActiveLocalTunnelPort()
+        var resolvedIsUserService = isUserService
+        if (resolvedIsUserService == null) {
+            val env = runCatching { inspectEnvironment(openCodePort = 4096, requireSystemd = false) }.getOrNull()
+            resolvedIsUserService = env?.isUserService ?: false
+        }
+
+        var lastServiceState = "active"
+        var lastDetail = "Нет ответа от /session"
+
+        for (attempt in 1..RESTART_POLL_MAX_ATTEMPTS) {
+            val elapsedSec = (attempt - 1) * (RESTART_POLL_INTERVAL_MS / 1000L)
+
+            // Check systemd service status on server (best effort; ignore transient SSH drop)
+            val svcState = runCatching { querySystemdActiveState(resolvedIsUserService) }.getOrNull()
+            if (svcState != null) {
+                lastServiceState = svcState
+                if (svcState == "failed" || svcState == "inactive") {
+                    return@withContext ServerReadyCheckResult(
+                        serviceActive = false,
+                        serverAlive = false,
+                        detail = "Служба opencode-serve остановилась (статус: $svcState)",
+                        activeTunnelPort = tunnelPort,
+                    )
+                }
+            }
+
+            // Ensure tunnel port is available
+            if (tunnelPort == null) {
+                onProgress?.invoke("Попытка $attempt/$RESTART_POLL_MAX_ATTEMPTS (${elapsedSec} с): пересоздание SSH-туннеля…")
+                tunnelPort = runCatching { connectionManager.recreateLocalTunnel() }.getOrNull()
+            }
+
+            if (tunnelPort != null) {
+                val probe = probeTunnelSessionJson(
+                    localTunnelPort = tunnelPort,
+                    auth = auth,
+                    treat401AsAlive = true,
+                )
+                lastDetail = probe.detail
+
+                if (probe.alive) {
+                    onProgress?.invoke("Сервер отвечает: ${probe.detail}")
+                    return@withContext ServerReadyCheckResult(
+                        serviceActive = lastServiceState == "active" || lastServiceState == "activating",
+                        serverAlive = true,
+                        detail = probe.detail,
+                        activeTunnelPort = tunnelPort,
+                    )
+                }
+
+                if (probe.isConnectionError) {
+                    onProgress?.invoke("Попытка $attempt/$RESTART_POLL_MAX_ATTEMPTS (${elapsedSec} с): обрыв туннеля, пересоздаём…")
+                    val rebuiltPort = runCatching { connectionManager.recreateLocalTunnel() }.getOrNull()
+                    if (rebuiltPort != null) {
+                        tunnelPort = rebuiltPort
+                        val retryProbe = probeTunnelSessionJson(
+                            localTunnelPort = rebuiltPort,
+                            auth = auth,
+                            treat401AsAlive = true,
+                        )
+                        lastDetail = retryProbe.detail
+                        if (retryProbe.alive) {
+                            onProgress?.invoke("Сервер отвечает: ${retryProbe.detail}")
+                            return@withContext ServerReadyCheckResult(
+                                serviceActive = lastServiceState == "active" || lastServiceState == "activating",
+                                serverAlive = true,
+                                detail = retryProbe.detail,
+                                activeTunnelPort = rebuiltPort,
+                            )
+                        }
+                    }
+                } else {
+                    onProgress?.invoke("Попытка $attempt/$RESTART_POLL_MAX_ATTEMPTS (${elapsedSec} с): ${probe.detail}")
+                }
+            } else {
+                lastDetail = "SSH-туннель недоступен"
+                onProgress?.invoke("Попытка $attempt/$RESTART_POLL_MAX_ATTEMPTS (${elapsedSec} с): ожидание SSH-туннеля…")
+            }
+
+            if (attempt < RESTART_POLL_MAX_ATTEMPTS) {
+                delay(RESTART_POLL_INTERVAL_MS)
+            }
+        }
+
+        val finalSvcState = runCatching { querySystemdActiveState(resolvedIsUserService) }.getOrNull()
+            ?: lastServiceState
+        ServerReadyCheckResult(
+            serviceActive = finalSvcState == "active",
+            serverAlive = false,
+            detail = lastDetail,
+            activeTunnelPort = tunnelPort,
+        )
+    }
+
+    private suspend fun querySystemdActiveState(isUserService: Boolean): String {
+        val activeCmd = if (isUserService) {
+            "bash -lc 'systemctl --user is-active opencode-serve 2>&1 || true'"
+        } else {
+            "bash -lc 'systemctl is-active opencode-serve 2>&1 || true'"
+        }
+        val actOut = execStreaming(activeCmd, 10, null).output.trim()
+        return actOut.lines().firstOrNull()?.trim().orEmpty().ifBlank { "unknown" }
     }
 
     suspend fun updateOpenCode(
@@ -710,7 +908,8 @@ class OpenCodeServerInstaller(
         }
         val ssCmd = "bash -lc 'ss -ltn 2>/dev/null | grep -E \"(:|\\])$port\\b\" || netstat -ltn 2>/dev/null | grep -E \":$port\\b\" || true'"
 
-        repeat(15) { attempt ->
+        var activePort = localTunnelPort ?: connectionManager.getActiveLocalTunnelPort()
+        repeat(RESTART_POLL_MAX_ATTEMPTS) { attempt ->
             val actOut = execStreaming(activeCmd, 10, null, redactList).output.trim()
             serviceActive = actOut.lines().firstOrNull()?.trim() == "active"
             serviceActiveDetail = actOut.lines().firstOrNull()?.trim().orEmpty().ifBlank { "unknown" }
@@ -725,10 +924,26 @@ class OpenCodeServerInstaller(
                 else -> "порт $port не слушается"
             }
 
-            if (localTunnelPort != null) {
-                val (ok, detail) = probeTunnelSessionJson(localTunnelPort, auth)
-                sessionJsonOk = ok
-                sessionJsonDetail = detail
+            if (activePort == null) {
+                activePort = runCatching { connectionManager.recreateLocalTunnel() }.getOrNull()
+            }
+            if (activePort != null) {
+                val probe = probeTunnelSessionJson(activePort, auth, treat401AsAlive = true)
+                if (probe.isConnectionError) {
+                    val rebuilt = runCatching { connectionManager.recreateLocalTunnel() }.getOrNull()
+                    if (rebuilt != null) {
+                        activePort = rebuilt
+                        val retryProbe = probeTunnelSessionJson(rebuilt, auth, treat401AsAlive = true)
+                        sessionJsonOk = retryProbe.alive
+                        sessionJsonDetail = retryProbe.detail
+                    } else {
+                        sessionJsonOk = probe.alive
+                        sessionJsonDetail = probe.detail
+                    }
+                } else {
+                    sessionJsonOk = probe.alive
+                    sessionJsonDetail = probe.detail
+                }
             } else {
                 sessionJsonOk = false
                 sessionJsonDetail = "SSH-туннель не активен"
@@ -748,8 +963,8 @@ class OpenCodeServerInstaller(
                 )
             }
 
-            if (attempt < 14) {
-                delay(1000L)
+            if (attempt < RESTART_POLL_MAX_ATTEMPTS - 1) {
+                delay(RESTART_POLL_INTERVAL_MS)
             }
         }
 
@@ -766,7 +981,8 @@ class OpenCodeServerInstaller(
     private fun probeTunnelSessionJson(
         localTunnelPort: Int,
         auth: OpenCodeServerAuth?,
-    ): Pair<Boolean, String> = runCatching {
+        treat401AsAlive: Boolean = false,
+    ): SessionProbeResult = runCatching {
         val builder = Request.Builder()
             .url("http://127.0.0.1:$localTunnelPort/session")
             .header("Accept", "application/json")
@@ -780,22 +996,46 @@ class OpenCodeServerInstaller(
         httpClient.newCall(builder.build()).execute().use { resp ->
             val body = resp.body?.string().orEmpty().trim()
             if (resp.code == 401) {
-                return@use false to "HTTP 401 (требуется Basic Auth)"
+                return@use SessionProbeResult(
+                    alive = treat401AsAlive,
+                    isConnectionError = false,
+                    detail = if (treat401AsAlive) {
+                        "HTTP 401 (сервер запущен, включена Basic Auth)"
+                    } else {
+                        "HTTP 401 (требуется Basic Auth)"
+                    },
+                )
             }
             if (resp.code !in 200..299) {
-                return@use false to "HTTP ${resp.code}"
+                return@use SessionProbeResult(
+                    alive = false,
+                    isConnectionError = false,
+                    detail = "HTTP ${resp.code}",
+                )
             }
             val isJson = (body.startsWith("[") && runCatching { JSONArray(body) }.isSuccess) ||
                 (body.startsWith("{") && runCatching { JSONObject(body) }.isSuccess)
             if (isJson) {
                 val authNote = if (auth != null) " (Basic Auth OK)" else ""
-                true to "HTTP ${resp.code} JSON$authNote"
+                SessionProbeResult(
+                    alive = true,
+                    isConnectionError = false,
+                    detail = "HTTP ${resp.code} JSON$authNote",
+                )
             } else {
-                false to "Ответ не является JSON"
+                SessionProbeResult(
+                    alive = false,
+                    isConnectionError = false,
+                    detail = "Ответ не является JSON",
+                )
             }
         }
     }.getOrElse { err ->
-        false to (err.message ?: "Нет соединения")
+        SessionProbeResult(
+            alive = false,
+            isConnectionError = true,
+            detail = err.message ?: "Нет соединения",
+        )
     }
 
     private suspend fun resolveAbsoluteBinaryPath(): String? {
@@ -884,4 +1124,9 @@ class OpenCodeServerInstaller(
     }
 
     private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+
+    companion object {
+        private const val RESTART_POLL_INTERVAL_MS = 2_000L
+        private const val RESTART_POLL_MAX_ATTEMPTS = 20 // 20 * 2s = 40 seconds
+    }
 }

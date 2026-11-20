@@ -552,4 +552,38 @@
     <string name="update_dialog_unknown_sources_desc">Чтобы установить обновление PocketPilot, включите «Установка из этого источника» в системных настройках. После возврата установка запустится автоматически.</string>
     <string name="update_dialog_open_settings">Открыть настройки</string>
     <string name="update_dialog_install_error">Не удалось запустить системный установщик APK</string>
+
+    <!-- Block A: Connect Model Steps & Non-Rollback Warning -->
+    <string name="model_steps_card_title">Применение настроек</string>
+    <string name="model_step_write_config">Запись конфига</string>
+    <string name="model_step_restart_service">Перезапуск службы</string>
+    <string name="model_step_wait_server">Ожидание сервера</string>
+    <string name="model_warning_title">Конфиг сохранён, сервер ещё не ответил</string>
+    <string name="model_warning_retry">Повторить</string>
+    <string name="model_warning_continue">Продолжить</string>
+
+    <!-- Block B: Chat Watchdog, Diagnostics & Message Copy -->
+    <string name="chat_stalled_title">Нет ответа от модели</string>
+    <string name="chat_stalled_desc">Более 60 секунд не поступало событий от сервера OpenCode.</string>
+    <string name="chat_stalled_wait">Подождать</string>
+    <string name="chat_stalled_stop">Остановить</string>
+    <string name="chat_stalled_switch_retry">Сменить модель и повторить</string>
+    <string name="chat_stalled_copy_diag">Копировать диагностику</string>
+    <string name="chat_diagnostics_copied">Диагностика скопирована</string>
+    <string name="chat_copy_message">Копировать сообщение</string>
+    <string name="chat_message_copied">Сообщение скопировано</string>
+
+    <!-- Block C: Workspace Folder Picker -->
+    <string name="workspace_folder_label">Проект</string>
+    <string name="workspace_folder_not_set">Домашняя папка</string>
+    <string name="workspace_picker_title">Рабочее пространство</string>
+    <string name="workspace_picker_recent">Недавние папки</string>
+    <string name="workspace_picker_create_folder">Создать папку</string>
+    <string name="workspace_picker_select_current">Выбрать эту папку</string>
+    <string name="workspace_picker_empty">Подпапок нет</string>
+    <string name="workspace_picker_create_label">Имя новой папки</string>
+    <string name="workspace_root_warning_title">Выбрать корневую папку /?</string>
+    <string name="workspace_root_warning_desc">Вы собираетесь сделать корень файловой системы «/» рабочим пространством агента. Агент увидит системные каталоги сервера. Лучше выбрать конкретную папку проекта.</string>
+    <string name="workspace_root_warning_confirm">Выбрать /</string>
+    <string name="files_action_set_workspace">Сделать рабочим пространством</string>
 </resources>

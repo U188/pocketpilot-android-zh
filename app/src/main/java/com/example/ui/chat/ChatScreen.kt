@@ -1,5 +1,8 @@
 package com.example.ui.chat
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -8,6 +11,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,20 +38,29 @@ import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AlternateEmail
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Difference
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -57,6 +72,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -109,6 +125,7 @@ fun ChatScreen(
     var showModelSheet by remember { mutableStateOf(false) }
     var showAgentSheet by remember { mutableStateOf(false) }
     var showFilePickerSheet by remember { mutableStateOf(false) }
+    var showWorkspaceSheet by remember { mutableStateOf(false) }
     var showDiffSheet by remember { mutableStateOf(false) }
     var focusedDiffFile by remember { mutableStateOf<String?>(null) }
     var renameTarget by remember { mutableStateOf<OpenCodeSession?>(null) }
@@ -175,6 +192,8 @@ fun ChatScreen(
                 onAddManualModel = viewModel::addManualModel,
                 onTestSelectedModel = viewModel::testSelectedModel,
                 onSaveCustomProvider = viewModel::saveCustomProviderAndFinish,
+                onRetryProviderCheck = viewModel::retryProviderHealthCheck,
+                onContinueAfterProviderWarning = viewModel::continueAfterProviderWarning,
                 onFinishWithFreeModels = viewModel::finishWithFreeModels,
                 onLogCopied = {
                     scope.launch {
@@ -219,6 +238,14 @@ fun ChatScreen(
                     }
                 }
             }
+
+            WorkspaceHeaderBar(
+                workspacePath = uiState.activeWorkspacePath,
+                onClick = {
+                    viewModel.openWorkspacePicker()
+                    showWorkspaceSheet = true
+                },
+            )
 
             BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 val isDualPane = maxWidth >= 840.dp
@@ -277,9 +304,30 @@ fun ChatScreen(
                         },
                         onRevertMessage = { revertTargetMessageId = it },
                         onOpenFile = { path -> onOpenCodeEditor(path, null) },
+                        onCopyMessage = { msg ->
+                            val text = ChatTimeFormatter.buildCopyableMessageText(msg)
+                            if (text.isNotBlank()) {
+                                copyPlainTextToClipboard(context, "Message", text)
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(context.getString(R.string.chat_message_copied))
+                                }
+                            }
+                        },
                         onCodeCopied = {
                             scope.launch {
                                 snackbarHostState.showSnackbar(context.getString(R.string.chat_code_copied))
+                            }
+                        },
+                        onWaitMore = viewModel::waitMoreForResponse,
+                        onSwitchModelAndRetry = {
+                            viewModel.requestSwitchModelAndRetry()
+                            showModelSheet = true
+                        },
+                        onCopyDiagnostics = {
+                            val report = viewModel.buildDiagnosticsReport()
+                            copyPlainTextToClipboard(context, "PocketPilot Diagnostics", report)
+                            scope.launch {
+                                snackbarHostState.showSnackbar(context.getString(R.string.chat_diagnostics_copied))
                             }
                         },
                         onComposerChange = { next ->
@@ -296,7 +344,10 @@ fun ChatScreen(
                         },
                         onRemoveAttachment = viewModel::removeAttachedFile,
                         onOpenAgentPicker = { showAgentSheet = true },
-                        onOpenModelPicker = { showModelSheet = true },
+                        onOpenModelPicker = {
+                            viewModel.cancelPendingSwitchModelAndRetry()
+                            showModelSheet = true
+                        },
                         onSend = viewModel::sendMessage,
                         onStop = viewModel::abortActiveSession,
                         modifier = Modifier
@@ -320,7 +371,10 @@ fun ChatScreen(
             selectedProviderId = uiState.selectedProviderId,
             selectedModelId = uiState.selectedModelId,
             onSelect = viewModel::selectModel,
-            onDismiss = { showModelSheet = false },
+            onDismiss = {
+                showModelSheet = false
+                viewModel.cancelPendingSwitchModelAndRetry()
+            },
         )
     }
 
@@ -343,6 +397,22 @@ fun ChatScreen(
                 viewModel.attachFile(entry.path, entry.name)
             },
             onDismiss = { showFilePickerSheet = false },
+        )
+    }
+
+    if (showWorkspaceSheet) {
+        WorkspacePickerBottomSheet(
+            currentPath = uiState.workspacePickerPath,
+            activeWorkspacePath = uiState.activeWorkspacePath,
+            recentWorkspaces = uiState.recentWorkspaces,
+            folders = uiState.workspacePickerFolders,
+            isLoading = uiState.isWorkspacePickerLoading,
+            isCreatingFolder = uiState.isCreatingWorkspaceFolder,
+            errorMessage = uiState.workspacePickerError,
+            onNavigate = viewModel::loadWorkspacePickerDirectory,
+            onCreateFolder = viewModel::createWorkspaceFolder,
+            onSelectWorkspace = viewModel::selectWorkspace,
+            onDismiss = { showWorkspaceSheet = false },
         )
     }
 
@@ -721,7 +791,11 @@ private fun ActiveSessionPane(
     onForkSession: () -> Unit,
     onRevertMessage: (String) -> Unit,
     onOpenFile: (String) -> Unit,
+    onCopyMessage: (OpenCodeMessage) -> Unit,
     onCodeCopied: () -> Unit,
+    onWaitMore: () -> Unit,
+    onSwitchModelAndRetry: () -> Unit,
+    onCopyDiagnostics: () -> Unit,
     onComposerChange: (String) -> Unit,
     onAttachClick: () -> Unit,
     onRemoveAttachment: (String) -> Unit,
@@ -732,9 +806,14 @@ private fun ActiveSessionPane(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
-    LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.parts?.size) {
-        if (uiState.messages.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.messages.lastIndex)
+    LaunchedEffect(
+        uiState.messages.size,
+        uiState.messages.lastOrNull()?.parts?.size,
+        uiState.isResponseStalled,
+    ) {
+        val totalItems = uiState.messages.size + if (uiState.isResponseStalled) 1 else 0
+        if (totalItems > 0) {
+            listState.animateScrollToItem(totalItems - 1)
         }
     }
 
@@ -845,14 +924,41 @@ private fun ActiveSessionPane(
                         contentPadding = PaddingValues(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        items(uiState.messages, key = { it.id }) { msg ->
+                        itemsIndexed(uiState.messages, key = { _, m -> m.id }) { index, msg ->
+                            val prevUserCreatedAt = remember(uiState.messages, index) {
+                                if (msg.isUser) {
+                                    null
+                                } else {
+                                    var found: Long? = null
+                                    for (i in (index - 1) downTo 0) {
+                                        val candidate = uiState.messages[i]
+                                        if (candidate.isUser && candidate.createdAtMillis > 0L) {
+                                            found = candidate.createdAtMillis
+                                            break
+                                        }
+                                    }
+                                    found
+                                }
+                            }
                             ChatMessageBubble(
                                 message = msg,
+                                previousUserCreatedAtMillis = prevUserCreatedAt,
                                 onOpenFile = onOpenFile,
                                 onOpenDiff = onOpenDiffSheet,
+                                onCopy = { onCopyMessage(msg) },
                                 onRevert = { onRevertMessage(msg.id) },
                                 onCodeCopied = onCodeCopied,
                             )
+                        }
+                        if (uiState.isResponseStalled) {
+                            item(key = "chat_stalled_banner") {
+                                ResponseStalledCard(
+                                    onWaitMore = onWaitMore,
+                                    onStop = onStop,
+                                    onSwitchModelAndRetry = onSwitchModelAndRetry,
+                                    onCopyDiagnostics = onCopyDiagnostics,
+                                )
+                            }
                         }
                     }
                 }
@@ -880,8 +986,10 @@ private fun ActiveSessionPane(
 @Composable
 private fun ChatMessageBubble(
     message: OpenCodeMessage,
+    previousUserCreatedAtMillis: Long?,
     onOpenFile: (String) -> Unit,
     onOpenDiff: (String?) -> Unit,
+    onCopy: () -> Unit,
     onRevert: () -> Unit,
     onCodeCopied: () -> Unit,
 ) {
@@ -894,6 +1002,24 @@ private fun ChatMessageBubble(
         MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
     } else {
         MaterialTheme.colorScheme.outlineVariant
+    }
+
+    val timestampLabel = remember(message.createdAtMillis) {
+        ChatTimeFormatter.formatMessageTimestamp(message.createdAtMillis)
+    }
+    val durationLabel = remember(
+        message.isUser,
+        message.createdAtMillis,
+        message.completedAtMillis,
+        previousUserCreatedAtMillis,
+    ) {
+        ChatTimeFormatter.resolveAssistantDuration(message, previousUserCreatedAtMillis)
+    }
+    val metaLine = remember(timestampLabel, durationLabel) {
+        listOfNotNull(
+            timestampLabel.takeIf { it.isNotBlank() },
+            durationLabel?.takeIf { it.isNotBlank() },
+        ).joinToString(" • ")
     }
 
     Surface(
@@ -911,32 +1037,61 @@ private fun ChatMessageBubble(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        text = stringResource(if (message.isUser) R.string.chat_role_user else R.string.chat_role_assistant),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (message.isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
-                    )
-                    message.agent?.let { agent ->
-                        StatusChip(
-                            label = agent,
-                            accentColor = MaterialTheme.colorScheme.secondary,
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = stringResource(if (message.isUser) R.string.chat_role_user else R.string.chat_role_assistant),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (message.isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
+                        )
+                        message.agent?.let { agent ->
+                            StatusChip(
+                                label = agent,
+                                accentColor = MaterialTheme.colorScheme.secondary,
+                            )
+                        }
+                    }
+                    if (metaLine.isNotBlank()) {
+                        Text(
+                            text = metaLine,
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
-                IconButton(
-                    onClick = onRevert,
-                    modifier = Modifier.size(32.dp),
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.History,
-                        contentDescription = stringResource(R.string.chat_revert_action),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
-                    )
+                    IconButton(
+                        onClick = onCopy,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("chat_copy_message_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ContentCopy,
+                            contentDescription = stringResource(R.string.chat_copy_message),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    IconButton(
+                        onClick = onRevert,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.History,
+                            contentDescription = stringResource(R.string.chat_revert_action),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
             }
 
@@ -1020,11 +1175,29 @@ private fun ChatMessageBubble(
             }
 
             message.error?.takeIf { it.isNotBlank() }?.let { err ->
-                Text(
-                    text = err,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ErrorOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            text = err,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
             }
         }
     }
@@ -1188,3 +1361,163 @@ private fun ChatComposerBar(
         }
     }
 }
+
+@Composable
+private fun WorkspaceHeaderBar(
+    workspacePath: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .testTag("chat_workspace_header_bar"),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.FolderOpen,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    text = stringResource(R.string.workspace_folder_label) + ":",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = workspacePath.ifBlank { stringResource(R.string.workspace_folder_not_set) },
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    imageVector = Icons.Rounded.ChevronRight,
+                    contentDescription = stringResource(R.string.workspace_picker_title),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ResponseStalledCard(
+    onWaitMore: () -> Unit,
+    onStop: () -> Unit,
+    onSwitchModelAndRetry: () -> Unit,
+    onCopyDiagnostics: () -> Unit,
+) {
+    val warningColor = LocalStatusColors.current.warning
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = warningColor.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, warningColor.copy(alpha = 0.55f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("chat_stalled_card"),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.WarningAmber,
+                    contentDescription = null,
+                    tint = warningColor,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text(
+                    text = stringResource(R.string.chat_stalled_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            Text(
+                text = stringResource(R.string.chat_stalled_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilledTonalButton(
+                    onClick = onWaitMore,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("chat_stalled_wait_button"),
+                ) {
+                    Icon(Icons.Rounded.HourglassTop, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(R.string.chat_stalled_wait),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                Button(
+                    onClick = onStop,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("chat_stalled_stop_button"),
+                ) {
+                    Icon(Icons.Rounded.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(R.string.chat_stalled_stop),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                OutlinedButton(
+                    onClick = onSwitchModelAndRetry,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("chat_stalled_switch_button"),
+                ) {
+                    Icon(Icons.Rounded.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(R.string.chat_stalled_switch_retry),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                OutlinedButton(
+                    onClick = onCopyDiagnostics,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("chat_stalled_diag_button"),
+                ) {
+                    Icon(Icons.Rounded.BugReport, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(R.string.chat_stalled_copy_diag),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun copyPlainTextToClipboard(context: Context, label: String, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+}
+

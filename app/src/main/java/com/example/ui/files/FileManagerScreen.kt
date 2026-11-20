@@ -104,6 +104,7 @@ import com.example.domain.model.FileSearchMode
 import com.example.domain.model.FileSortBy
 import com.example.domain.model.LocalSafEntry
 import com.example.domain.model.RemoteFileEntry
+import com.example.ui.chat.RootWorkspaceWarningDialog
 import com.example.ui.theme.LocalStatusColors
 import com.example.ui.theme.MonoFontFamily
 import java.time.Instant
@@ -116,6 +117,7 @@ fun FileManagerScreen(
     onOpenServers: () -> Unit,
     onOpenCodeEditor: (remotePath: String, line: Int?) -> Unit,
     onAttachToChat: (RemoteFileEntry) -> Unit = {},
+    onSetWorkspace: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -131,6 +133,16 @@ fun FileManagerScreen(
     var pendingDownloadEntry by remember { mutableStateOf<RemoteFileEntry?>(null) }
     var showFolderTree by remember { mutableStateOf(false) }
     var showTransferQueue by remember { mutableStateOf(false) }
+    var pendingRootWorkspace by remember { mutableStateOf(false) }
+
+    val requestSetWorkspace: (String) -> Unit = { targetPath ->
+        val normalized = com.example.data.sftp.SftpRepository.normalizeRemotePath(targetPath)
+        if (normalized == "/") {
+            pendingRootWorkspace = true
+        } else {
+            onSetWorkspace(normalized)
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.messages.collect { msg ->
@@ -244,6 +256,7 @@ fun FileManagerScreen(
                         currentPath = uiState.currentPath,
                         onNavigate = viewModel::openDirectory,
                         onNavigateUp = { viewModel.navigateUp() },
+                        onSetCurrentAsWorkspace = { requestSetWorkspace(uiState.currentPath) },
                     )
 
                     uiState.clipboard?.let { clip ->
@@ -299,6 +312,7 @@ fun FileManagerScreen(
                             onChmod = { chmodTarget = it },
                             onProperties = { propertiesTarget = it },
                             onAttachToChat = onAttachToChat,
+                            onSetWorkspace = { entry -> requestSetWorkspace(entry.path) },
                             onDelete = { deleteTargets = listOf(it) },
                             onRetry = viewModel::refresh,
                             modifier = Modifier.weight(1f),
@@ -448,6 +462,16 @@ fun FileManagerScreen(
             onCancelTask = viewModel::cancelTransfer,
             onClearFinished = viewModel::clearFinishedTransfers,
             onDismiss = { showTransferQueue = false },
+        )
+    }
+
+    if (pendingRootWorkspace) {
+        RootWorkspaceWarningDialog(
+            onConfirm = {
+                pendingRootWorkspace = false
+                onSetWorkspace("/")
+            },
+            onDismiss = { pendingRootWorkspace = false },
         )
     }
 }
@@ -693,6 +717,7 @@ private fun BreadcrumbsBar(
     currentPath: String,
     onNavigate: (String) -> Unit,
     onNavigateUp: () -> Unit,
+    onSetCurrentAsWorkspace: () -> Unit,
 ) {
     val segments = remember(currentPath) {
         val list = mutableListOf("/" to "/")
@@ -754,6 +779,20 @@ private fun BreadcrumbsBar(
                     )
                 }
             }
+        }
+
+        IconButton(
+            onClick = onSetCurrentAsWorkspace,
+            modifier = Modifier
+                .size(36.dp)
+                .testTag("files_set_current_workspace_button"),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.FolderOpen,
+                contentDescription = stringResource(R.string.files_action_set_workspace),
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
@@ -966,6 +1005,7 @@ private fun RemoteFileListContent(
     onChmod: (RemoteFileEntry) -> Unit,
     onProperties: (RemoteFileEntry) -> Unit,
     onAttachToChat: (RemoteFileEntry) -> Unit,
+    onSetWorkspace: (RemoteFileEntry) -> Unit,
     onDelete: (RemoteFileEntry) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1033,6 +1073,7 @@ private fun RemoteFileListContent(
                         onChmod = { onChmod(entry) },
                         onProperties = { onProperties(entry) },
                         onAttachToChat = { onAttachToChat(entry) },
+                        onSetWorkspace = { onSetWorkspace(entry) },
                         onDelete = { onDelete(entry) },
                     )
                 }
@@ -1059,6 +1100,7 @@ private fun RemoteFileRow(
     onChmod: () -> Unit,
     onProperties: () -> Unit,
     onAttachToChat: () -> Unit,
+    onSetWorkspace: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -1185,7 +1227,16 @@ private fun RemoteFileRow(
                                 onMove()
                             },
                         )
-                        if (!entry.isDirectory) {
+                        if (entry.isDirectory) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.files_action_set_workspace)) },
+                                leadingIcon = { Icon(Icons.Rounded.FolderOpen, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onSetWorkspace()
+                                },
+                            )
+                        } else {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.chat_attach_from_files)) },
                                 leadingIcon = { Icon(Icons.Rounded.AlternateEmail, contentDescription = null) },

@@ -317,6 +317,10 @@ fun WorkspaceScreen(
                                     chatViewModel.attachFile(entry.path, entry.name)
                                     selectedTab = WorkspaceTab.CHAT
                                 },
+                                onSetWorkspace = { path ->
+                                    chatViewModel.selectWorkspace(path)
+                                    selectedTab = WorkspaceTab.CHAT
+                                },
                             )
 
                             WorkspaceTab.TERMINAL -> TerminalScreen(

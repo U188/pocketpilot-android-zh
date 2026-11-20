@@ -7,6 +7,7 @@ import com.example.data.local.AppPreferencesRepository
 import com.example.data.opencode.OpenCodeApiClient
 import com.example.data.opencode.OpenCodeConfigHelper
 import com.example.data.opencode.OpenCodeServerInstaller
+import com.example.data.opencode.ProviderApplyOutcome
 import com.example.data.sftp.SftpRepository
 import com.example.data.ssh.SshConnectionManager
 import com.example.domain.model.AttachedFileRef
@@ -27,6 +28,8 @@ import com.example.domain.model.OpenCodeServerStatus
 import com.example.domain.model.OpenCodeSession
 import com.example.domain.model.OpenCodeSetupUiState
 import com.example.domain.model.PermissionReplyOption
+import com.example.domain.model.ProviderSaveStepItem
+import com.example.domain.model.ProviderSaveWarning
 import com.example.domain.model.RemoteFileEntry
 import com.example.domain.model.SetupWizardStage
 import com.example.domain.model.SseConnectionStatus
@@ -42,6 +45,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 data class ChatUiState(
     val isConnected: Boolean = false,
@@ -71,6 +77,18 @@ data class ChatUiState(
     val isSubmittingPermission: Boolean = false,
     val sessionDiffs: List<OpenCodeFileDiff> = emptyList(),
     val isLoadingDiffs: Boolean = false,
+    // Block B: 60s response inactivity watchdog
+    val isResponseStalled: Boolean = false,
+    val pendingSwitchModelAndRetry: Boolean = false,
+    // Block C: Project workspace folder selection
+    val activeWorkspacePath: String = "",
+    val homeDirectoryPath: String = "",
+    val recentWorkspaces: List<String> = emptyList(),
+    val workspacePickerPath: String = "/",
+    val workspacePickerFolders: List<RemoteFileEntry> = emptyList(),
+    val isWorkspacePickerLoading: Boolean = false,
+    val workspacePickerError: String? = null,
+    val isCreatingWorkspaceFolder: Boolean = false,
 ) {
     val activeSession: OpenCodeSession?
         get() = sessions.firstOrNull { it.id == activeSessionId }
@@ -108,13 +126,27 @@ class ChatViewModel(
     private var messagesJob: Job? = null
     private var setupJob: Job? = null
     private var draftSaveJob: Job? = null
+    private var inactivityWatchdogJob: Job? = null
     private var lastTunnelPort: Int? = null
     private var lastProfileId: Long? = null
     private var restoredDraftOnce = false
 
+    private var activeWorkspaceByProfile: Map<Long, String> = emptyMap()
+    private var recentWorkspacesByProfile: Map<Long, List<String>> = emptyMap()
+    private var lastSessionEventAtMs: Long = 0L
+    private var lastSessionError: String? = null
+    private var lastSentPromptText: String = ""
+    private var lastSentAttachments: List<AttachedFileRef> = emptyList()
+
     init {
         viewModelScope.launch {
             preferencesRepository.settings.collect { settings ->
+                activeWorkspaceByProfile = settings.activeWorkspaceByProfile
+                recentWorkspacesByProfile = settings.recentWorkspacesByProfile
+                val currentProfileId = lastProfileId
+                val savedActiveWs = currentProfileId?.let { activeWorkspaceByProfile[it] }
+                val savedRecentWs = currentProfileId?.let { recentWorkspacesByProfile[it] }.orEmpty()
+
                 _uiState.update { state ->
                     val shouldRestore = !restoredDraftOnce
                     if (shouldRestore) restoredDraftOnce = true
@@ -132,6 +164,8 @@ class ChatViewModel(
                         } else {
                             state.composerText
                         },
+                        activeWorkspacePath = state.activeWorkspacePath.ifBlank { savedActiveWs.orEmpty() },
+                        recentWorkspaces = savedRecentWs.ifEmpty { state.recentWorkspaces },
                     )
                 }
             }
@@ -147,6 +181,19 @@ class ChatViewModel(
                         lastProfileId = conn.profile.id
                         lastTunnelPort = conn.localTunnelPort
 
+                        val savedWorkspace = activeWorkspaceByProfile[conn.profile.id].orEmpty()
+                        val savedRecent = recentWorkspacesByProfile[conn.profile.id].orEmpty()
+                        val effectiveWorkspace = if (profileChanged) {
+                            savedWorkspace
+                        } else {
+                            _uiState.value.activeWorkspacePath.ifBlank { savedWorkspace }
+                        }
+                        if (effectiveWorkspace.isNotBlank()) {
+                            apiClient.setActiveDirectory(effectiveWorkspace)
+                        } else if (profileChanged) {
+                            apiClient.setActiveDirectory(null)
+                        }
+
                         _uiState.update { state ->
                             state.copy(
                                 isConnected = true,
@@ -157,6 +204,9 @@ class ChatViewModel(
                                 messages = if (profileChanged) emptyList() else state.messages,
                                 sessions = if (profileChanged) emptyList() else state.sessions,
                                 sessionDiffs = if (profileChanged) emptyList() else state.sessionDiffs,
+                                isResponseStalled = if (profileChanged) false else state.isResponseStalled,
+                                activeWorkspacePath = effectiveWorkspace,
+                                recentWorkspaces = savedRecent,
                                 setup = if (profileChanged) {
                                     OpenCodeSetupUiState(
                                         serverStatus = OpenCodeServerStatus.CHECKING,
@@ -179,6 +229,7 @@ class ChatViewModel(
 
                     is SshConnectionState.Reconnecting -> {
                         stopSseStream()
+                        cancelInactivityWatchdog()
                         lastTunnelPort = null
                         _uiState.update {
                             it.copy(
@@ -191,8 +242,10 @@ class ChatViewModel(
 
                     else -> {
                         stopSseStream()
+                        cancelInactivityWatchdog()
                         setupJob?.cancel()
                         lastTunnelPort = null
+                        apiClient.setActiveDirectory(null)
                         _uiState.update {
                             it.copy(
                                 isConnected = false,
@@ -200,6 +253,8 @@ class ChatViewModel(
                                 openCodePortReachable = false,
                                 sseStatus = SseConnectionStatus.DISCONNECTED,
                                 isSending = false,
+                                isResponseStalled = false,
+                                pendingSwitchModelAndRetry = false,
                                 pendingPermissions = emptyList(),
                                 sessionDiffs = emptyList(),
                                 setup = OpenCodeSetupUiState(),
@@ -306,14 +361,32 @@ class ChatViewModel(
     }
 
     fun openSession(sessionId: String) {
-        _uiState.update { it.copy(activeSessionId = sessionId, sessionDiffs = emptyList(), errorMessage = null) }
+        cancelInactivityWatchdog()
+        _uiState.update {
+            it.copy(
+                activeSessionId = sessionId,
+                sessionDiffs = emptyList(),
+                errorMessage = null,
+                isResponseStalled = false,
+            )
+        }
         viewModelScope.launch { preferencesRepository.setLastChatSessionId(sessionId) }
         loadMessages(sessionId)
         loadSessionDiffs(sessionId)
+        if (_uiState.value.sessions.firstOrNull { it.id == sessionId }?.isBusy == true) {
+            resetInactivityWatchdog()
+        }
     }
 
     fun closeActiveSession() {
-        _uiState.update { it.copy(activeSessionId = null, sessionDiffs = emptyList()) }
+        cancelInactivityWatchdog()
+        _uiState.update {
+            it.copy(
+                activeSessionId = null,
+                sessionDiffs = emptyList(),
+                isResponseStalled = false,
+            )
+        }
         viewModelScope.launch { preferencesRepository.setLastChatSessionId(null) }
     }
 
@@ -419,15 +492,66 @@ class ChatViewModel(
     }
 
     fun selectModel(model: OpenCodeModel) {
+        val shouldRetryWithNewModel = _uiState.value.pendingSwitchModelAndRetry
         _uiState.update {
             it.copy(
                 selectedProviderId = model.providerId,
                 selectedModelId = model.modelId,
+                pendingSwitchModelAndRetry = false,
             )
         }
         viewModelScope.launch {
             preferencesRepository.setDefaultModel(model.providerId, model.modelId)
+            if (shouldRetryWithNewModel) {
+                retryLastPromptWithModel(model.providerId, model.modelId)
+            }
         }
+    }
+
+    fun requestSwitchModelAndRetry() {
+        _uiState.update { it.copy(pendingSwitchModelAndRetry = true) }
+    }
+
+    fun cancelPendingSwitchModelAndRetry() {
+        _uiState.update { it.copy(pendingSwitchModelAndRetry = false) }
+    }
+
+    fun waitMoreForResponse() {
+        _uiState.update { it.copy(isResponseStalled = false) }
+        resetInactivityWatchdog()
+    }
+
+    fun buildDiagnosticsReport(): String {
+        val state = _uiState.value
+        val conn = connectionManager.connectionState.value as? SshConnectionState.Connected
+        val now = System.currentTimeMillis()
+        val timeStr = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            .format(Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()))
+        val sinceLastEventSec = if (lastSessionEventAtMs > 0L) (now - lastSessionEventAtMs) / 1000L else -1L
+        val lastMsg = state.messages.lastOrNull()
+        val report = buildString {
+            appendLine("=== PocketPilot Chat Diagnostics ===")
+            appendLine("Время: $timeStr")
+            appendLine("Сервер: ${conn?.profile?.name ?: "н/д"} (${conn?.profile?.host ?: "н/д"}:${conn?.profile?.openCodePort ?: state.openCodePort})")
+            appendLine("SSH-туннель: ${conn?.localTunnelPort?.let { "127.0.0.1:$it" } ?: "не активен"}")
+            appendLine("Рабочее пространство: ${state.activeWorkspacePath.ifBlank { "по умолчанию" }}")
+            appendLine("ID сессии: ${state.activeSessionId ?: "нет"}")
+            appendLine("Модель: ${state.selectedProviderId}/${state.selectedModelId} (${state.selectedModelDisplay ?: "н/д"})")
+            appendLine("Агент: ${state.selectedAgentName}")
+            appendLine("Статус SSE: ${state.sseStatus}")
+            appendLine("Сессия занята: ${state.isActiveSessionBusy} (isSending=${state.isSending})")
+            appendLine("Сообщений в чате: ${state.messages.size}")
+            if (sinceLastEventSec >= 0L) {
+                appendLine("Секунд с последнего SSE-события: $sinceLastEventSec")
+            }
+            if (!lastSessionError.isNullOrBlank()) {
+                appendLine("Последняя ошибка: $lastSessionError")
+            }
+            if (lastMsg?.error?.isNotBlank() == true) {
+                appendLine("Ошибка последнего сообщения: ${lastMsg.error}")
+            }
+        }
+        return OpenCodeConfigHelper.sanitizeLogs(report)
     }
 
     fun selectAgent(agentName: String) {
@@ -443,66 +567,121 @@ class ChatViewModel(
         val attachments = state.attachedFiles
         if (text.isEmpty() && attachments.isEmpty()) return
 
+        lastSentPromptText = text
+        lastSentAttachments = attachments
+
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
                     isSending = true,
+                    isResponseStalled = false,
                     composerText = "",
                     attachedFiles = emptyList(),
                 )
             }
             preferencesRepository.setLastChatDraft("")
-            try {
-                val targetSessionId = state.activeSessionId ?: run {
-                    val created = apiClient.createSession()
-                    _uiState.update { s ->
-                        s.copy(
-                            sessions = listOf(created) + s.sessions.filterNot { it.id == created.id },
-                            activeSessionId = created.id,
-                            messages = emptyList(),
-                        )
-                    }
-                    created.id
-                }
+            dispatchPromptToServer(
+                text = text,
+                attachments = attachments,
+                providerId = state.selectedProviderId.takeIf { it.isNotBlank() },
+                modelId = state.selectedModelId.takeIf { it.isNotBlank() },
+                agent = state.selectedAgentName.takeIf { it.isNotBlank() },
+                restoreDraftOnFailure = true,
+            )
+        }
+    }
 
-                markSessionBusy(targetSessionId, busy = true)
-                apiClient.sendMessage(
-                    sessionId = targetSessionId,
-                    text = text,
-                    attachments = attachments,
-                    providerId = state.selectedProviderId.takeIf { it.isNotBlank() },
-                    modelId = state.selectedModelId.takeIf { it.isNotBlank() },
-                    agent = state.selectedAgentName.takeIf { it.isNotBlank() },
-                )
-                _uiState.update { it.copy(isSending = false) }
-                // Sync snapshot if SSE hasn't delivered the new user message yet
-                if (_uiState.value.sseStatus != SseConnectionStatus.CONNECTED) {
-                    loadMessages(targetSessionId)
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                _uiState.update {
-                    it.copy(
-                        isSending = false,
-                        composerText = if (it.composerText.isEmpty()) text else it.composerText,
-                        attachedFiles = if (it.attachedFiles.isEmpty()) attachments else it.attachedFiles,
+    private suspend fun retryLastPromptWithModel(providerId: String, modelId: String) {
+        val state = _uiState.value
+        val activeId = state.activeSessionId
+        if (activeId != null && state.isActiveSessionBusy) {
+            runCatching { apiClient.abortSession(activeId) }
+            markSessionBusy(activeId, busy = false)
+        }
+        val promptText = lastSentPromptText.ifBlank {
+            state.messages.lastOrNull { it.isUser }?.let { ChatTimeFormatter.buildCopyableMessageText(it) }.orEmpty()
+        }
+        val attachments = if (lastSentPromptText.isNotBlank()) lastSentAttachments else emptyList()
+        if (promptText.isBlank() && attachments.isEmpty()) {
+            _toastMessages.tryEmit("Модель изменена на $modelId")
+            return
+        }
+        _uiState.update { it.copy(isSending = true, isResponseStalled = false) }
+        _toastMessages.tryEmit("Повтор отправки с моделью $modelId…")
+        dispatchPromptToServer(
+            text = promptText,
+            attachments = attachments,
+            providerId = providerId.takeIf { it.isNotBlank() },
+            modelId = modelId.takeIf { it.isNotBlank() },
+            agent = state.selectedAgentName.takeIf { it.isNotBlank() },
+            restoreDraftOnFailure = false,
+        )
+    }
+
+    private suspend fun dispatchPromptToServer(
+        text: String,
+        attachments: List<AttachedFileRef>,
+        providerId: String?,
+        modelId: String?,
+        agent: String?,
+        restoreDraftOnFailure: Boolean,
+    ) {
+        try {
+            val targetSessionId = _uiState.value.activeSessionId ?: run {
+                val created = apiClient.createSession()
+                _uiState.update { s ->
+                    s.copy(
+                        sessions = listOf(created) + s.sessions.filterNot { it.id == created.id },
+                        activeSessionId = created.id,
+                        messages = emptyList(),
                     )
                 }
-                _uiState.value.activeSessionId?.let { markSessionBusy(it, busy = false) }
-                _toastMessages.tryEmit(t.message ?: "Не удалось отправить сообщение")
+                created.id
             }
+
+            lastSessionError = null
+            markSessionBusy(targetSessionId, busy = true)
+            resetInactivityWatchdog()
+            apiClient.sendMessage(
+                sessionId = targetSessionId,
+                text = text,
+                attachments = attachments,
+                providerId = providerId,
+                modelId = modelId,
+                agent = agent,
+            )
+            _uiState.update { it.copy(isSending = false) }
+            // Sync snapshot if SSE hasn't delivered the new user message yet
+            if (_uiState.value.sseStatus != SseConnectionStatus.CONNECTED) {
+                loadMessages(targetSessionId)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            cancelInactivityWatchdog()
+            lastSessionError = t.message
+            _uiState.update {
+                it.copy(
+                    isSending = false,
+                    isResponseStalled = false,
+                    composerText = if (restoreDraftOnFailure && it.composerText.isEmpty()) text else it.composerText,
+                    attachedFiles = if (restoreDraftOnFailure && it.attachedFiles.isEmpty()) attachments else it.attachedFiles,
+                )
+            }
+            _uiState.value.activeSessionId?.let { markSessionBusy(it, busy = false) }
+            _toastMessages.tryEmit(t.message ?: "Не удалось отправить сообщение")
         }
     }
 
     fun abortActiveSession() {
         val sessionId = _uiState.value.activeSessionId ?: return
+        cancelInactivityWatchdog()
         viewModelScope.launch {
             runCatching {
                 apiClient.abortSession(sessionId)
             }.onSuccess {
                 markSessionBusy(sessionId, busy = false)
-                _uiState.update { it.copy(isSending = false) }
+                _uiState.update { it.copy(isSending = false, isResponseStalled = false) }
             }.onFailure { err ->
                 _toastMessages.tryEmit(err.message ?: "Не удалось остановить генерацию")
             }
@@ -581,13 +760,13 @@ class ChatViewModel(
         }
     }
 
-    // Inline @ File Picker via SFTP
+    // Inline @ File Picker via SFTP (defaults to active workspace folder)
     fun openFilePicker(initialPath: String? = null) {
         viewModelScope.launch {
             _uiState.update { it.copy(isPickerLoading = true) }
-            val resolvedPath = initialPath ?: runCatching {
-                sftpRepository.resolveInitialDirectory()
-            }.getOrDefault("/")
+            val resolvedPath = initialPath?.takeIf { it.isNotBlank() }
+                ?: _uiState.value.activeWorkspacePath.takeIf { it.isNotBlank() }
+                ?: runCatching { sftpRepository.resolveInitialDirectory() }.getOrDefault("/")
             loadPickerDirectory(resolvedPath)
         }
     }
@@ -612,10 +791,154 @@ class ChatViewModel(
         }
     }
 
+    // Block C: Project Workspace Folder Picker (directories-only over SFTP)
+    fun openWorkspacePicker() {
+        val startPath = _uiState.value.activeWorkspacePath.ifBlank {
+            _uiState.value.homeDirectoryPath.ifBlank { "/" }
+        }
+        loadWorkspacePickerDirectory(startPath)
+    }
+
+    fun loadWorkspacePickerDirectory(path: String) {
+        val normalized = SftpRepository.normalizeRemotePath(path)
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    workspacePickerPath = normalized,
+                    isWorkspacePickerLoading = true,
+                    workspacePickerError = null,
+                )
+            }
+            runCatching {
+                sftpRepository.listDirectory(normalized, includeHidden = false)
+                    .filter { it.isDirectory }
+                    .sortedBy { it.name.lowercase() }
+            }.onSuccess { folders ->
+                _uiState.update {
+                    it.copy(
+                        workspacePickerPath = normalized,
+                        workspacePickerFolders = folders,
+                        isWorkspacePickerLoading = false,
+                        workspacePickerError = null,
+                    )
+                }
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _uiState.update {
+                    it.copy(
+                        isWorkspacePickerLoading = false,
+                        workspacePickerError = err.message ?: "Не удалось открыть папку по SFTP",
+                    )
+                }
+            }
+        }
+    }
+
+    fun createWorkspaceFolder(folderName: String) {
+        val cleanName = folderName.trim().trim('/')
+        if (cleanName.isEmpty() || cleanName.contains('/')) return
+        val parentPath = _uiState.value.workspacePickerPath
+        val childPath = SftpRepository.joinRemotePath(parentPath, cleanName)
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCreatingWorkspaceFolder = true, workspacePickerError = null) }
+            runCatching {
+                sftpRepository.createDirectory(parentPath = parentPath, name = cleanName)
+            }.onSuccess { createdPath ->
+                _uiState.update { it.copy(isCreatingWorkspaceFolder = false) }
+                _toastMessages.tryEmit("Папка «$cleanName» создана")
+                loadWorkspacePickerDirectory(createdPath)
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _uiState.update {
+                    it.copy(
+                        isCreatingWorkspaceFolder = false,
+                        workspacePickerError = err.message ?: "Не удалось создать папку",
+                    )
+                }
+            }
+        }
+    }
+
+    fun selectWorkspace(path: String) {
+        val normalized = SftpRepository.normalizeRemotePath(path)
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected
+        val profileId = connected?.profile?.id ?: lastProfileId
+
+        apiClient.setActiveDirectory(normalized)
+        cancelInactivityWatchdog()
+
+        _uiState.update { state ->
+            val updatedRecent = (listOf(normalized) + state.recentWorkspaces.filterNot { it == normalized }).take(8)
+            state.copy(
+                activeWorkspacePath = normalized,
+                recentWorkspaces = updatedRecent,
+                activeSessionId = null,
+                messages = emptyList(),
+                sessionDiffs = emptyList(),
+                isResponseStalled = false,
+                errorMessage = null,
+            )
+        }
+
+        viewModelScope.launch {
+            if (profileId != null) {
+                preferencesRepository.setActiveWorkspace(profileId, normalized)
+            }
+            preferencesRepository.setLastChatSessionId(null)
+        }
+
+        if (connected != null && _uiState.value.setup.serverStatus == OpenCodeServerStatus.RUNNING) {
+            startSseStream(connected.localTunnelPort)
+            refreshAll()
+        }
+        _toastMessages.tryEmit("Рабочее пространство: $normalized")
+    }
+
+    private fun ensureWorkspaceInitialized(profileId: Long, detectedHomeDir: String?) {
+        val current = _uiState.value.activeWorkspacePath
+        val home = detectedHomeDir?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        if (home != null && _uiState.value.homeDirectoryPath != home) {
+            _uiState.update { it.copy(homeDirectoryPath = home) }
+        }
+        val saved = activeWorkspaceByProfile[profileId]
+        val resolved = current.ifBlank { saved.orEmpty() }.ifBlank { home.orEmpty() }
+        if (resolved.isNotBlank()) {
+            val normalized = SftpRepository.normalizeRemotePath(resolved)
+            apiClient.setActiveDirectory(normalized)
+            if (_uiState.value.activeWorkspacePath != normalized) {
+                _uiState.update { state ->
+                    val recent = recentWorkspacesByProfile[profileId].orEmpty().ifEmpty { listOf(normalized) }
+                    state.copy(activeWorkspacePath = normalized, recentWorkspaces = recent)
+                }
+            }
+            if (saved.isNullOrBlank()) {
+                viewModelScope.launch { preferencesRepository.setActiveWorkspace(profileId, normalized) }
+            }
+        }
+    }
+
+    private fun resetInactivityWatchdog() {
+        lastSessionEventAtMs = System.currentTimeMillis()
+        inactivityWatchdogJob?.cancel()
+        if (!_uiState.value.isActiveSessionBusy) return
+        inactivityWatchdogJob = viewModelScope.launch {
+            delay(INACTIVITY_WATCHDOG_MS)
+            if (_uiState.value.isActiveSessionBusy && _uiState.value.activeSessionId != null) {
+                _uiState.update { it.copy(isResponseStalled = true) }
+            }
+        }
+    }
+
+    private fun cancelInactivityWatchdog() {
+        inactivityWatchdogJob?.cancel()
+        inactivityWatchdogJob = null
+    }
+
     private fun startSseStream(tunnelPort: Int) {
         stopSseStream()
+        val workspaceDir = _uiState.value.activeWorkspacePath.takeIf { it.isNotBlank() }
         sseJob = viewModelScope.launch {
-            apiClient.observeEvents(tunnelPort).collect { (status, event) ->
+            apiClient.observeEvents(tunnelPort, workspaceDir).collect { (status, event) ->
                 _uiState.update { it.copy(sseStatus = status) }
                 if (event != null) {
                     applyEvent(event)
@@ -642,30 +965,111 @@ class ChatViewModel(
             }
 
             is OpenCodeEvent.SessionDeleted -> {
+                if (event.sessionId == _uiState.value.activeSessionId) {
+                    cancelInactivityWatchdog()
+                }
                 _uiState.update { state ->
                     state.copy(
                         sessions = state.sessions.filterNot { it.id == event.sessionId },
                         activeSessionId = if (state.activeSessionId == event.sessionId) null else state.activeSessionId,
+                        isResponseStalled = if (state.activeSessionId == event.sessionId) false else state.isResponseStalled,
                     )
                 }
             }
 
             is OpenCodeEvent.SessionStatusChanged -> {
                 markSessionBusy(event.sessionId, event.isBusy)
+                if (event.sessionId == _uiState.value.activeSessionId) {
+                    lastSessionEventAtMs = System.currentTimeMillis()
+                    if (event.isBusy) {
+                        _uiState.update { it.copy(isResponseStalled = false) }
+                        resetInactivityWatchdog()
+                    } else {
+                        cancelInactivityWatchdog()
+                        val completedNow = System.currentTimeMillis()
+                        _uiState.update { state ->
+                            val lastAssistantIdx = state.messages.indexOfLast { !it.isUser }
+                            val updatedMessages = if (lastAssistantIdx >= 0 && state.messages[lastAssistantIdx].completedAtMillis == null) {
+                                state.messages.mapIndexed { idx, msg ->
+                                    if (idx == lastAssistantIdx) msg.copy(completedAtMillis = completedNow) else msg
+                                }
+                            } else {
+                                state.messages
+                            }
+                            state.copy(
+                                isSending = false,
+                                isResponseStalled = false,
+                                messages = updatedMessages,
+                            )
+                        }
+                    }
+                }
+            }
+
+            is OpenCodeEvent.SessionError -> {
+                val activeId = _uiState.value.activeSessionId
+                val matchesActive = activeId != null && (event.sessionId == null || event.sessionId == activeId)
+                event.sessionId?.let { markSessionBusy(it, busy = false) }
+                if (matchesActive && activeId != null) {
+                    cancelInactivityWatchdog()
+                    lastSessionError = event.message
+                    lastSessionEventAtMs = System.currentTimeMillis()
+                    markSessionBusy(activeId, busy = false)
+                    val now = System.currentTimeMillis()
+                    _uiState.update { state ->
+                        val lastIdx = state.messages.lastIndex
+                        val updatedMessages = if (lastIdx >= 0 && !state.messages[lastIdx].isUser) {
+                            state.messages.mapIndexed { idx, msg ->
+                                if (idx == lastIdx) {
+                                    msg.copy(
+                                        error = event.message,
+                                        completedAtMillis = msg.completedAtMillis ?: now,
+                                    )
+                                } else {
+                                    msg
+                                }
+                            }
+                        } else {
+                            state.messages + OpenCodeMessage(
+                                id = "session_err_$now",
+                                sessionId = activeId,
+                                role = "assistant",
+                                createdAtMillis = now,
+                                completedAtMillis = now,
+                                error = event.message,
+                            )
+                        }
+                        state.copy(
+                            isSending = false,
+                            isResponseStalled = false,
+                            messages = updatedMessages,
+                        )
+                    }
+                }
             }
 
             is OpenCodeEvent.MessageUpdated -> {
                 if (event.message.sessionId != _uiState.value.activeSessionId) return
+                if (!event.message.error.isNullOrBlank()) {
+                    lastSessionError = event.message.error
+                }
                 _uiState.update { state ->
                     val existing = state.messages.firstOrNull { it.id == event.message.id }
                     val merged = if (existing != null) {
-                        event.message.copy(parts = existing.parts)
+                        event.message.copy(
+                            parts = existing.parts,
+                            completedAtMillis = event.message.completedAtMillis ?: existing.completedAtMillis,
+                            error = event.message.error ?: existing.error,
+                        )
                     } else {
                         event.message
                     }
                     val updatedList = (state.messages.filterNot { it.id == merged.id } + merged)
                         .sortedBy { it.createdAtMillis }
-                    state.copy(messages = updatedList)
+                    state.copy(messages = updatedList, isResponseStalled = false)
+                }
+                if (_uiState.value.isActiveSessionBusy) {
+                    resetInactivityWatchdog()
                 }
             }
 
@@ -684,7 +1088,10 @@ class ChatViewModel(
                     val updatedMsg = targetMsg.copy(parts = updatedParts)
                     val updatedMsgs = (state.messages.filterNot { it.id == updatedMsg.id } + updatedMsg)
                         .sortedBy { it.createdAtMillis }
-                    state.copy(messages = updatedMsgs)
+                    state.copy(messages = updatedMsgs, isResponseStalled = false)
+                }
+                if (_uiState.value.isActiveSessionBusy) {
+                    resetInactivityWatchdog()
                 }
             }
 
@@ -707,14 +1114,20 @@ class ChatViewModel(
                     val updatedMsgs = state.messages.map {
                         if (it.id == targetMsg.id) it.copy(parts = updatedParts) else it
                     }
-                    state.copy(messages = updatedMsgs)
+                    state.copy(messages = updatedMsgs, isResponseStalled = false)
+                }
+                if (_uiState.value.isActiveSessionBusy) {
+                    resetInactivityWatchdog()
                 }
             }
 
             is OpenCodeEvent.PermissionAsked -> {
                 _uiState.update { state ->
                     val withoutDup = state.pendingPermissions.filterNot { it.id == event.request.id }
-                    state.copy(pendingPermissions = withoutDup + event.request)
+                    state.copy(pendingPermissions = withoutDup + event.request, isResponseStalled = false)
+                }
+                if (event.request.sessionId == _uiState.value.activeSessionId && _uiState.value.isActiveSessionBusy) {
+                    resetInactivityWatchdog()
                 }
             }
 
@@ -728,7 +1141,10 @@ class ChatViewModel(
 
             is OpenCodeEvent.SessionDiffUpdated -> {
                 if (event.sessionId == _uiState.value.activeSessionId) {
-                    _uiState.update { it.copy(sessionDiffs = event.diffs) }
+                    _uiState.update { it.copy(sessionDiffs = event.diffs, isResponseStalled = false) }
+                    if (_uiState.value.isActiveSessionBusy) {
+                        resetInactivityWatchdog()
+                    }
                 }
             }
         }
@@ -815,6 +1231,7 @@ class ChatViewModel(
                 )
             }.onSuccess { (status, env) ->
                 val wasRunning = _uiState.value.setup.serverStatus == OpenCodeServerStatus.RUNNING
+                ensureWorkspaceInitialized(profileId = profileId, detectedHomeDir = env.homeDir)
                 _uiState.update { state ->
                     state.copy(
                         openCodePortReachable = status == OpenCodeServerStatus.RUNNING,
@@ -924,6 +1341,9 @@ class ChatViewModel(
                     isRunningAction = false,
                     errorMessage = null,
                     apiKeyInput = "",
+                    providerSaveSteps = emptyList(),
+                    providerSaveWarning = null,
+                    isRetryingProviderCheck = false,
                 ),
             )
         }
@@ -1201,6 +1621,9 @@ class ChatViewModel(
                     fetchModelsError = null,
                     modelTestResult = null,
                     configuredProvidersError = null,
+                    providerSaveSteps = emptyList(),
+                    providerSaveWarning = null,
+                    isRetryingProviderCheck = false,
                 ),
             )
         }
@@ -1606,6 +2029,8 @@ class ChatViewModel(
                     setup = it.setup.copy(
                         isSavingProvider = true,
                         errorMessage = null,
+                        providerSaveSteps = buildProviderSaveSteps(),
+                        providerSaveWarning = null,
                     ),
                 )
             }
@@ -1615,48 +2040,222 @@ class ChatViewModel(
                     request = request,
                     openCodePort = connected.profile.openCodePort,
                     localTunnelPort = connected.localTunnelPort,
+                    onStepUpdate = ::updateProviderSaveStep,
                 )
-            }.onSuccess { (savedProviderId, savedDefaultModelId) ->
-                apiClient.invalidateDiscoveryCache()
-                // Purge API key immediately from memory; it is never stored in the app
-                _uiState.update { state ->
-                    state.copy(
-                        selectedProviderId = savedProviderId,
-                        selectedModelId = savedDefaultModelId,
-                        openCodePortReachable = true,
-                        setup = state.setup.copy(
-                            serverStatus = OpenCodeServerStatus.RUNNING,
-                            wizardStage = SetupWizardStage.IDLE,
-                            isSavingProvider = false,
-                            editingProviderId = null,
-                            editingMaskedApiKey = null,
-                            apiKeyInput = "",
-                            modelTestResult = null,
-                            fetchModelsError = null,
-                            errorMessage = null,
-                        ),
-                    )
+            }.onSuccess { outcome ->
+                when (outcome) {
+                    is ProviderApplyOutcome.Success -> {
+                        val savedProviderId = outcome.providerId ?: providerId
+                        val savedDefaultModelId = outcome.defaultModelId ?: defaultModelId
+                        completeProviderSaveAndOpenChat(
+                            providerId = savedProviderId,
+                            defaultModelId = savedDefaultModelId,
+                            tunnelPort = outcome.tunnelPort ?: connected.localTunnelPort,
+                            toastMessage = "Провайдер сохранён, служба перезапущена, выбрана модель $savedDefaultModelId",
+                        )
+                    }
+
+                    is ProviderApplyOutcome.SavedWithCheckWarning -> {
+                        // Config was written & service is active — keep opencode.json, show warning with Retry/Continue
+                        _uiState.update { state ->
+                            state.copy(
+                                setup = state.setup.copy(
+                                    isSavingProvider = false,
+                                    apiKeyInput = "",
+                                    errorMessage = null,
+                                    providerSaveWarning = ProviderSaveWarning(
+                                        message = outcome.warningMessage,
+                                        providerId = outcome.providerId ?: providerId,
+                                        defaultModelId = outcome.defaultModelId ?: defaultModelId,
+                                    ),
+                                ),
+                            )
+                        }
+                        loadConfiguredProviders()
+                    }
+
+                    is ProviderApplyOutcome.RolledBackServiceInactive -> {
+                        _uiState.update { state ->
+                            state.copy(
+                                setup = state.setup.copy(
+                                    isSavingProvider = false,
+                                    providerSaveWarning = null,
+                                    errorMessage = outcome.errorMessage,
+                                ),
+                            )
+                        }
+                        loadConfiguredProviders()
+                    }
                 }
-                preferencesRepository.setDefaultModel(savedProviderId, savedDefaultModelId)
-                refreshAll()
-                startSseStream(connected.localTunnelPort)
-                _toastMessages.tryEmit("Провайдер сохранён, служба перезапущена, выбрана модель $savedDefaultModelId")
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
                     err.message ?: "Не удалось сохранить конфигурацию на сервере",
                     listOf(secretKey),
                 )
+                updateProviderSaveStep(0, InstallStepStatus.ERROR, safeMsg)
                 _uiState.update {
                     it.copy(
                         setup = it.setup.copy(
                             isSavingProvider = false,
+                            providerSaveWarning = null,
                             errorMessage = safeMsg,
                         ),
                     )
                 }
             }
         }
+    }
+
+    fun retryProviderHealthCheck() {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        val warning = _uiState.value.setup.providerSaveWarning ?: return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    setup = it.setup.copy(
+                        isRetryingProviderCheck = true,
+                        errorMessage = null,
+                    ),
+                )
+            }
+            runCatching {
+                serverInstaller.providerManager.retryServerHealthCheck(
+                    profileId = connected.profile.id,
+                    localTunnelPort = connected.localTunnelPort,
+                    providerId = warning.providerId,
+                    defaultModelId = warning.defaultModelId,
+                    onStepUpdate = ::updateProviderSaveStep,
+                )
+            }.onSuccess { outcome ->
+                when (outcome) {
+                    is ProviderApplyOutcome.Success -> {
+                        val tunnel = outcome.tunnelPort ?: connectionManager.getActiveLocalTunnelPort() ?: connected.localTunnelPort
+                        if (!outcome.providerId.isNullOrBlank() && !outcome.defaultModelId.isNullOrBlank()) {
+                            completeProviderSaveAndOpenChat(
+                                providerId = outcome.providerId,
+                                defaultModelId = outcome.defaultModelId,
+                                tunnelPort = tunnel,
+                                toastMessage = "Сервер ответил (${outcome.detail}), выбрана модель ${outcome.defaultModelId}",
+                            )
+                        } else {
+                            apiClient.invalidateDiscoveryCache()
+                            _uiState.update { state ->
+                                state.copy(
+                                    setup = state.setup.copy(
+                                        isRetryingProviderCheck = false,
+                                        providerSaveWarning = null,
+                                    ),
+                                )
+                            }
+                            loadConfiguredProviders()
+                            refreshAll()
+                            startSseStream(tunnel)
+                            _toastMessages.tryEmit("Сервер OpenCode отвечает (${outcome.detail})")
+                        }
+                    }
+
+                    is ProviderApplyOutcome.SavedWithCheckWarning -> {
+                        _uiState.update { state ->
+                            state.copy(
+                                setup = state.setup.copy(
+                                    isRetryingProviderCheck = false,
+                                    providerSaveWarning = warning.copy(message = outcome.warningMessage),
+                                ),
+                            )
+                        }
+                    }
+
+                    is ProviderApplyOutcome.RolledBackServiceInactive -> {
+                        _uiState.update { state ->
+                            state.copy(
+                                setup = state.setup.copy(
+                                    isRetryingProviderCheck = false,
+                                    providerSaveWarning = null,
+                                    errorMessage = outcome.errorMessage,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _uiState.update {
+                    it.copy(
+                        setup = it.setup.copy(
+                            isRetryingProviderCheck = false,
+                            errorMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "Ошибка повторной проверки"),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun continueAfterProviderWarning() {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected
+        val warning = _uiState.value.setup.providerSaveWarning ?: return
+        val tunnelPort = connectionManager.getActiveLocalTunnelPort() ?: connected?.localTunnelPort
+
+        viewModelScope.launch {
+            if (!warning.providerId.isNullOrBlank() && !warning.defaultModelId.isNullOrBlank()) {
+                completeProviderSaveAndOpenChat(
+                    providerId = warning.providerId,
+                    defaultModelId = warning.defaultModelId,
+                    tunnelPort = tunnelPort,
+                    toastMessage = "Конфиг сохранён. Выбрана модель ${warning.defaultModelId}",
+                )
+            } else {
+                apiClient.invalidateDiscoveryCache()
+                _uiState.update { state ->
+                    state.copy(
+                        setup = state.setup.copy(
+                            providerSaveWarning = null,
+                            isRetryingProviderCheck = false,
+                        ),
+                    )
+                }
+                loadConfiguredProviders()
+                refreshAll()
+                if (tunnelPort != null) startSseStream(tunnelPort)
+            }
+        }
+    }
+
+    private suspend fun completeProviderSaveAndOpenChat(
+        providerId: String,
+        defaultModelId: String,
+        tunnelPort: Int?,
+        toastMessage: String,
+    ) {
+        apiClient.invalidateDiscoveryCache()
+        _uiState.update { state ->
+            state.copy(
+                selectedProviderId = providerId,
+                selectedModelId = defaultModelId,
+                openCodePortReachable = true,
+                setup = state.setup.copy(
+                    serverStatus = OpenCodeServerStatus.RUNNING,
+                    wizardStage = SetupWizardStage.IDLE,
+                    isSavingProvider = false,
+                    isRetryingProviderCheck = false,
+                    providerSaveWarning = null,
+                    editingProviderId = null,
+                    editingMaskedApiKey = null,
+                    apiKeyInput = "",
+                    modelTestResult = null,
+                    fetchModelsError = null,
+                    errorMessage = null,
+                ),
+            )
+        }
+        preferencesRepository.setDefaultModel(providerId, defaultModelId)
+        refreshAll()
+        if (tunnelPort != null) {
+            startSseStream(tunnelPort)
+        }
+        _toastMessages.tryEmit(toastMessage)
     }
 
     fun changeProviderApiKey(provider: ConfiguredProviderInfo, newApiKey: String) {
@@ -1671,6 +2270,8 @@ class ChatViewModel(
                         isProviderActionBusy = true,
                         configuredProvidersError = null,
                         errorMessage = null,
+                        providerSaveSteps = buildProviderSaveSteps(),
+                        providerSaveWarning = null,
                     ),
                 )
             }
@@ -1682,31 +2283,69 @@ class ChatViewModel(
                     newApiKey = cleanKey,
                     openCodePort = connected.profile.openCodePort,
                     localTunnelPort = connected.localTunnelPort,
+                    onStepUpdate = ::updateProviderSaveStep,
                 )
-            }.onSuccess {
-                apiClient.invalidateDiscoveryCache()
-                _uiState.update { state ->
-                    state.copy(
-                        setup = state.setup.copy(
-                            isProviderActionBusy = false,
-                            editingMaskedApiKey = if (state.setup.editingProviderId == provider.providerId) {
-                                OpenCodeConfigHelper.maskApiKey(cleanKey)
-                            } else {
-                                state.setup.editingMaskedApiKey
-                            },
-                            configuredProvidersError = null,
-                        ),
-                    )
+            }.onSuccess { outcome ->
+                when (outcome) {
+                    is ProviderApplyOutcome.Success -> {
+                        apiClient.invalidateDiscoveryCache()
+                        _uiState.update { state ->
+                            state.copy(
+                                setup = state.setup.copy(
+                                    isProviderActionBusy = false,
+                                    editingMaskedApiKey = if (state.setup.editingProviderId == provider.providerId) {
+                                        OpenCodeConfigHelper.maskApiKey(cleanKey)
+                                    } else {
+                                        state.setup.editingMaskedApiKey
+                                    },
+                                    configuredProvidersError = null,
+                                    providerSaveWarning = null,
+                                ),
+                            )
+                        }
+                        loadConfiguredProviders()
+                        refreshAll()
+                        _toastMessages.tryEmit("API-ключ провайдера «${provider.name}» обновлён")
+                    }
+
+                    is ProviderApplyOutcome.SavedWithCheckWarning -> {
+                        _uiState.update { state ->
+                            state.copy(
+                                setup = state.setup.copy(
+                                    isProviderActionBusy = false,
+                                    editingMaskedApiKey = if (state.setup.editingProviderId == provider.providerId) {
+                                        OpenCodeConfigHelper.maskApiKey(cleanKey)
+                                    } else {
+                                        state.setup.editingMaskedApiKey
+                                    },
+                                    providerSaveWarning = ProviderSaveWarning(
+                                        message = outcome.warningMessage,
+                                    ),
+                                ),
+                            )
+                        }
+                        loadConfiguredProviders()
+                    }
+
+                    is ProviderApplyOutcome.RolledBackServiceInactive -> {
+                        _uiState.update { state ->
+                            state.copy(
+                                setup = state.setup.copy(
+                                    isProviderActionBusy = false,
+                                    configuredProvidersError = outcome.errorMessage,
+                                ),
+                            )
+                        }
+                        loadConfiguredProviders()
+                    }
                 }
-                loadConfiguredProviders()
-                refreshAll()
-                _toastMessages.tryEmit("API-ключ провайдера «${provider.name}» обновлён")
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
                     err.message ?: "Не удалось обновить API-ключ",
                     listOf(cleanKey),
                 )
+                updateProviderSaveStep(0, InstallStepStatus.ERROR, safeMsg)
                 _uiState.update {
                     it.copy(
                         setup = it.setup.copy(
@@ -1728,6 +2367,8 @@ class ChatViewModel(
                         isProviderActionBusy = true,
                         configuredProvidersError = null,
                         errorMessage = null,
+                        providerSaveSteps = buildProviderSaveSteps(),
+                        providerSaveWarning = null,
                     ),
                 )
             }
@@ -1737,35 +2378,72 @@ class ChatViewModel(
                     providerId = provider.providerId,
                     openCodePort = connected.profile.openCodePort,
                     localTunnelPort = connected.localTunnelPort,
+                    onStepUpdate = ::updateProviderSaveStep,
                 )
-            }.onSuccess {
-                apiClient.invalidateDiscoveryCache()
-                val wasSelected = _uiState.value.selectedProviderId == provider.providerId
-                val wasEditing = _uiState.value.setup.editingProviderId == provider.providerId
-                _uiState.update { state ->
-                    state.copy(
-                        selectedProviderId = if (wasSelected) "" else state.selectedProviderId,
-                        selectedModelId = if (wasSelected) "" else state.selectedModelId,
-                        setup = state.setup.copy(
-                            isProviderActionBusy = false,
-                            configuredProvidersError = null,
-                        ),
-                    )
+            }.onSuccess { outcome ->
+                when (outcome) {
+                    is ProviderApplyOutcome.Success -> {
+                        apiClient.invalidateDiscoveryCache()
+                        val wasSelected = _uiState.value.selectedProviderId == provider.providerId
+                        val wasEditing = _uiState.value.setup.editingProviderId == provider.providerId
+                        _uiState.update { state ->
+                            state.copy(
+                                selectedProviderId = if (wasSelected) "" else state.selectedProviderId,
+                                selectedModelId = if (wasSelected) "" else state.selectedModelId,
+                                setup = state.setup.copy(
+                                    isProviderActionBusy = false,
+                                    configuredProvidersError = null,
+                                    providerSaveWarning = null,
+                                ),
+                            )
+                        }
+                        if (wasSelected) {
+                            preferencesRepository.setDefaultModel("", "")
+                        }
+                        if (wasEditing) {
+                            startNewProviderEditor()
+                        }
+                        loadConfiguredProviders()
+                        refreshAll()
+                        _toastMessages.tryEmit("Провайдер «${provider.name}» удалён")
+                    }
+
+                    is ProviderApplyOutcome.SavedWithCheckWarning -> {
+                        val wasSelected = _uiState.value.selectedProviderId == provider.providerId
+                        _uiState.update { state ->
+                            state.copy(
+                                selectedProviderId = if (wasSelected) "" else state.selectedProviderId,
+                                selectedModelId = if (wasSelected) "" else state.selectedModelId,
+                                setup = state.setup.copy(
+                                    isProviderActionBusy = false,
+                                    providerSaveWarning = ProviderSaveWarning(message = outcome.warningMessage),
+                                ),
+                            )
+                        }
+                        if (wasSelected) {
+                            preferencesRepository.setDefaultModel("", "")
+                        }
+                        loadConfiguredProviders()
+                    }
+
+                    is ProviderApplyOutcome.RolledBackServiceInactive -> {
+                        _uiState.update { state ->
+                            state.copy(
+                                setup = state.setup.copy(
+                                    isProviderActionBusy = false,
+                                    configuredProvidersError = outcome.errorMessage,
+                                ),
+                            )
+                        }
+                        loadConfiguredProviders()
+                    }
                 }
-                if (wasSelected) {
-                    preferencesRepository.setDefaultModel("", "")
-                }
-                if (wasEditing) {
-                    startNewProviderEditor()
-                }
-                loadConfiguredProviders()
-                refreshAll()
-                _toastMessages.tryEmit("Провайдер «${provider.name}» удалён")
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
                     err.message ?: "Не удалось удалить провайдер",
                 )
+                updateProviderSaveStep(0, InstallStepStatus.ERROR, safeMsg)
                 _uiState.update {
                     it.copy(
                         setup = it.setup.copy(
@@ -1775,6 +2453,22 @@ class ChatViewModel(
                     )
                 }
             }
+        }
+    }
+
+    private fun buildProviderSaveSteps(): List<ProviderSaveStepItem> = listOf(
+        ProviderSaveStepItem(id = "write_config", title = "Запись конфига (opencode.json)"),
+        ProviderSaveStepItem(id = "restart_service", title = "Перезапуск службы opencode-serve"),
+        ProviderSaveStepItem(id = "wait_server", title = "Ожидание ответа сервера (до 40 с)"),
+    )
+
+    private fun updateProviderSaveStep(index: Int, status: InstallStepStatus, detail: String?) {
+        _uiState.update { state ->
+            val current = state.setup.providerSaveSteps.ifEmpty { buildProviderSaveSteps() }
+            val updated = current.mapIndexed { idx, item ->
+                if (idx == index) item.copy(status = status, detail = detail) else item
+            }
+            state.copy(setup = state.setup.copy(providerSaveSteps = updated))
         }
     }
 
@@ -1789,6 +2483,7 @@ class ChatViewModel(
                     wizardStage = SetupWizardStage.IDLE,
                     apiKeyInput = "",
                     errorMessage = null,
+                    providerSaveWarning = null,
                 ),
             )
         }
@@ -1809,9 +2504,14 @@ class ChatViewModel(
 
     override fun onCleared() {
         stopSseStream()
+        cancelInactivityWatchdog()
         setupJob?.cancel()
         draftSaveJob?.cancel()
         super.onCleared()
+    }
+
+    companion object {
+        private const val INACTIVITY_WATCHDOG_MS = 60_000L
     }
 
     class Factory(

@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.HourglassEmpty
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarOutline
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -79,9 +81,12 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.model.ConfiguredProviderInfo
 import com.example.domain.model.CustomModelEntry
+import com.example.domain.model.InstallStepStatus
 import com.example.domain.model.ModelTestResult
 import com.example.domain.model.OpenCodeServerStatus
 import com.example.domain.model.OpenCodeSetupUiState
+import com.example.domain.model.ProviderSaveStepItem
+import com.example.domain.model.ProviderSaveWarning
 import com.example.ui.components.StatusChip
 import com.example.ui.theme.LocalStatusColors
 import com.example.ui.theme.MonoFontFamily
@@ -109,6 +114,8 @@ internal fun ConnectModelPane(
     onAddManualModel: () -> Unit,
     onTestModel: () -> Unit,
     onSaveProvider: () -> Unit,
+    onRetryProviderCheck: () -> Unit,
+    onContinueAfterProviderWarning: () -> Unit,
     onFinishFree: () -> Unit,
 ) {
     var showApiKey by remember { mutableStateOf(false) }
@@ -145,7 +152,9 @@ internal fun ConnectModelPane(
             if (setupState.serverStatus == OpenCodeServerStatus.RUNNING) {
                 IconButton(
                     onClick = onClose,
-                    enabled = !setupState.isSavingProvider && !setupState.isProviderActionBusy,
+                    enabled = !setupState.isSavingProvider &&
+                        !setupState.isProviderActionBusy &&
+                        !setupState.isRetryingProviderCheck,
                     modifier = Modifier.testTag("connect_model_back_button"),
                 ) {
                     Icon(
@@ -186,7 +195,9 @@ internal fun ConnectModelPane(
         ConfiguredProvidersSection(
             providers = setupState.configuredProviders,
             isLoading = setupState.isLoadingConfiguredProviders,
-            isBusy = setupState.isProviderActionBusy || setupState.isSavingProvider,
+            isBusy = setupState.isProviderActionBusy ||
+                setupState.isSavingProvider ||
+                setupState.isRetryingProviderCheck,
             editingProviderId = setupState.editingProviderId,
             errorMessage = setupState.configuredProvidersError,
             onRefresh = onRefreshProviders,
@@ -554,6 +565,19 @@ internal fun ConnectModelPane(
             }
         }
 
+        if (setupState.providerSaveSteps.isNotEmpty()) {
+            ProviderSaveStepsCard(steps = setupState.providerSaveSteps)
+        }
+
+        setupState.providerSaveWarning?.let { warning ->
+            ProviderSaveWarningCard(
+                warning = warning,
+                isRetrying = setupState.isRetryingProviderCheck,
+                onRetry = onRetryProviderCheck,
+                onContinue = onContinueAfterProviderWarning,
+            )
+        }
+
         setupState.errorMessage?.let { err ->
             ErrorBannerCard(message = err)
         }
@@ -563,6 +587,7 @@ internal fun ConnectModelPane(
                 onClick = onSaveProvider,
                 enabled = !setupState.isSavingProvider &&
                     !setupState.isProviderActionBusy &&
+                    !setupState.isRetryingProviderCheck &&
                     setupState.baseUrl.isNotBlank() &&
                     (selectedModels.isNotEmpty() || setupState.manualModelIdInput.isNotBlank()),
                 modifier = Modifier
@@ -1130,3 +1155,159 @@ private fun ChangeProviderKeyDialog(
         },
     )
 }
+
+@Composable
+private fun ProviderSaveStepsCard(steps: List<ProviderSaveStepItem>) {
+    val statusColors = LocalStatusColors.current
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("provider_save_steps_card"),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.model_steps_card_title),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            steps.forEach { step ->
+                val (statusLabelRes, tint) = when (step.status) {
+                    InstallStepStatus.PENDING -> R.string.setup_step_pending to MaterialTheme.colorScheme.onSurfaceVariant
+                    InstallStepStatus.RUNNING -> R.string.setup_step_running to MaterialTheme.colorScheme.primary
+                    InstallStepStatus.SUCCESS -> R.string.setup_step_success to statusColors.connected
+                    InstallStepStatus.ERROR -> R.string.setup_step_error to MaterialTheme.colorScheme.error
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    when (step.status) {
+                        InstallStepStatus.PENDING -> Icon(
+                            imageVector = Icons.Rounded.HourglassEmpty,
+                            contentDescription = null,
+                            tint = tint,
+                            modifier = Modifier.size(18.dp),
+                        )
+
+                        InstallStepStatus.RUNNING -> CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                        )
+
+                        InstallStepStatus.SUCCESS -> Icon(
+                            imageVector = Icons.Rounded.CheckCircle,
+                            contentDescription = null,
+                            tint = tint,
+                            modifier = Modifier.size(18.dp),
+                        )
+
+                        InstallStepStatus.ERROR -> Icon(
+                            imageVector = Icons.Rounded.ErrorOutline,
+                            contentDescription = null,
+                            tint = tint,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = step.title,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = step.detail?.takeIf { it.isNotBlank() } ?: stringResource(statusLabelRes),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = tint,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProviderSaveWarningCard(
+    warning: ProviderSaveWarning,
+    isRetrying: Boolean,
+    onRetry: () -> Unit,
+    onContinue: () -> Unit,
+) {
+    val warningColor = LocalStatusColors.current.warning
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = warningColor.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, warningColor.copy(alpha = 0.55f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("provider_save_warning_card"),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.WarningAmber,
+                    contentDescription = null,
+                    tint = warningColor,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text(
+                    text = stringResource(R.string.model_warning_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            SelectionContainer {
+                Text(
+                    text = warning.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onRetry,
+                    enabled = !isRetrying,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("provider_warning_retry_button"),
+                ) {
+                    if (isRetrying) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                    } else {
+                        Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text(stringResource(R.string.model_warning_retry))
+                }
+                Button(
+                    onClick = onContinue,
+                    enabled = !isRetrying,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("provider_warning_continue_button"),
+                ) {
+                    Text(stringResource(R.string.model_warning_continue))
+                }
+            }
+        }
+    }
+}
+

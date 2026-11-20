@@ -73,6 +73,7 @@ data class OpenCodeMessage(
     val sessionId: String,
     val role: String, // "user" or "assistant"
     val createdAtMillis: Long = 0L,
+    val completedAtMillis: Long? = null,
     val providerId: String? = null,
     val modelId: String? = null,
     val agent: String? = null,
@@ -186,4 +187,5 @@ sealed interface OpenCodeEvent {
     data class PermissionAsked(val request: OpenCodePermissionRequest) : OpenCodeEvent
     data class PermissionReplied(val requestId: String, val sessionId: String?) : OpenCodeEvent
     data class SessionDiffUpdated(val sessionId: String, val diffs: List<OpenCodeFileDiff>) : OpenCodeEvent
+    data class SessionError(val sessionId: String?, val message: String) : OpenCodeEvent
 }

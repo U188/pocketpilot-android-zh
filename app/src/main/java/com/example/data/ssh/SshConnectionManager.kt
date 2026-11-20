@@ -162,6 +162,39 @@ class SshConnectionManager(
         connect(currentProfile.id)
     }
 
+    /**
+     * Recreates the local SSH port-forwarding tunnel on the active SSH session (or performs a fresh
+     * SSH reconnect if the underlying SSH transport has dropped). Returns the active local tunnel
+     * port, or null if reconnection failed.
+     */
+    suspend fun recreateLocalTunnel(): Int? = withContext(Dispatchers.IO) {
+        val currentProfile = extractProfile(_connectionState.value) ?: return@withContext null
+        val client = getActiveSshClient()
+        if (client != null) {
+            val oldTunnel = activeTunnel
+            activeTunnel = null
+            runCatching { oldTunnel?.close() }
+            val recreated = runCatching {
+                SshTunnelForwarder.start(client, currentProfile.openCodePort, managerScope)
+            }.getOrNull()
+            if (recreated != null) {
+                activeTunnel = recreated
+                val currentState = _connectionState.value
+                if (currentState is SshConnectionState.Connected) {
+                    _connectionState.value = currentState.copy(localTunnelPort = recreated.localPort)
+                }
+                return@withContext recreated.localPort
+            }
+        }
+
+        // Underlying SSH session dropped or tunnel creation failed — attempt one fresh reconnect
+        val freshProfile = runCatching { profileRepository.getProfile(currentProfile.id) }.getOrNull()
+            ?: currentProfile
+        val secrets = runCatching { profileRepository.getSecrets(freshProfile.id) }.getOrDefault(ServerSecrets())
+        performConnect(freshProfile, secrets)
+        getActiveLocalTunnelPort()
+    }
+
     fun disconnect() {
         manualDisconnectRequested = true
         pendingHostKeyDecision?.complete(false)

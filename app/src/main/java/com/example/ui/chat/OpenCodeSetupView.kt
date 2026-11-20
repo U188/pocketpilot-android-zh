@@ -119,6 +119,8 @@ fun OpenCodeSetupView(
     onAddManualModel: () -> Unit,
     onTestSelectedModel: () -> Unit,
     onSaveCustomProvider: () -> Unit,
+    onRetryProviderCheck: () -> Unit,
+    onContinueAfterProviderWarning: () -> Unit,
     onFinishWithFreeModels: () -> Unit,
     onLogCopied: () -> Unit,
     modifier: Modifier = Modifier,
@@ -174,6 +176,8 @@ fun OpenCodeSetupView(
                     onAddManualModel = onAddManualModel,
                     onTestModel = onTestSelectedModel,
                     onSaveProvider = onSaveCustomProvider,
+                    onRetryProviderCheck = onRetryProviderCheck,
+                    onContinueAfterProviderWarning = onContinueAfterProviderWarning,
                     onFinishFree = onFinishWithFreeModels,
                 )
             }

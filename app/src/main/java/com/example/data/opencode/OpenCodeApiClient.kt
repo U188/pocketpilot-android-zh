@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -30,6 +31,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
@@ -57,6 +59,15 @@ class OpenCodeApiClient(
     @Volatile
     private var discoveredPaths: DiscoveredOpenCodePaths = DiscoveredOpenCodePaths()
 
+    @Volatile
+    private var activeDirectory: String? = null
+
+    fun setActiveDirectory(directory: String?) {
+        activeDirectory = directory?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    fun getActiveDirectory(): String? = activeDirectory
+
     fun invalidateDiscoveryCache() {
         discoveredPort = null
     }
@@ -72,6 +83,51 @@ class OpenCodeApiClient(
         return this
     }
 
+    private fun buildScopedRequestBuilder(
+        rawUrl: String,
+        includeDirectory: Boolean = true,
+        directoryOverride: String? = null,
+    ): Request.Builder {
+        val dir = if (includeDirectory) {
+            directoryOverride?.trim()?.takeIf { it.isNotEmpty() } ?: activeDirectory
+        } else {
+            null
+        }
+        val paths = discoveredPaths
+        val finalUrl = if (dir != null && !paths.directoryQueryParamName.isNullOrBlank()) {
+            val parsed = rawUrl.toHttpUrlOrNull()
+            if (parsed != null) {
+                parsed.newBuilder()
+                    .addQueryParameter(paths.directoryQueryParamName, dir)
+                    .build()
+                    .toString()
+            } else {
+                rawUrl
+            }
+        } else {
+            rawUrl
+        }
+
+        val builder = Request.Builder()
+            .url(finalUrl)
+            .applyOpenCodeAuth()
+
+        if (dir != null && !paths.directoryHeaderName.isNullOrBlank()) {
+            builder.header(paths.directoryHeaderName, encodeHeaderDirectoryValue(dir))
+        }
+        return builder
+    }
+
+    private fun encodeHeaderDirectoryValue(dir: String): String {
+        val isPureVisibleAscii = dir.all { it.code in 0x20..0x7E }
+        return if (isPureVisibleAscii) {
+            dir
+        } else {
+            // OkHttp headers require ASCII; OpenCode decodes x-opencode-directory with decodeURIComponent
+            URLEncoder.encode(dir, StandardCharsets.UTF_8.name()).replace("+", "%20")
+        }
+    }
+
     private fun requireBaseUrl(): Pair<Int, String> {
         val port = connectionManager.getActiveLocalTunnelPort()
             ?: throw IllegalStateException("SSH-туннель к OpenCode не активен")
@@ -82,7 +138,7 @@ class OpenCodeApiClient(
         val (port, baseUrl) = requireBaseUrl()
         if (discoveredPort == port) return@withContext discoveredPaths
 
-        val docJson = runCatching { executeGet("$baseUrl/doc") }.getOrNull()
+        val docJson = runCatching { executeGet("$baseUrl/doc", includeDirectory = false) }.getOrNull()
         val parsed = if (!docJson.isNullOrBlank()) {
             OpenCodeJsonParser.parseOpenApiDoc(docJson)
         } else {
@@ -297,17 +353,22 @@ class OpenCodeApiClient(
         }
     }
 
-    fun observeEvents(tunnelPort: Int): Flow<Pair<SseConnectionStatus, OpenCodeEvent?>> = flow {
+    fun observeEvents(
+        tunnelPort: Int,
+        workspaceDirectory: String? = activeDirectory,
+    ): Flow<Pair<SseConnectionStatus, OpenCodeEvent?>> = flow {
         val url = "http://127.0.0.1:$tunnelPort/event"
         var attempt = 0
 
         while (currentCoroutineContext().isActive) {
             emit((if (attempt == 0) SseConnectionStatus.CONNECTING else SseConnectionStatus.RECONNECTING) to null)
-            val request = Request.Builder()
-                .url(url)
+            val request = buildScopedRequestBuilder(
+                rawUrl = url,
+                includeDirectory = true,
+                directoryOverride = workspaceDirectory,
+            )
                 .header("Accept", "text/event-stream")
                 .header("Cache-Control", "no-cache")
-                .applyOpenCodeAuth()
                 .get()
                 .build()
 
@@ -360,32 +421,31 @@ class OpenCodeApiClient(
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun executeGet(url: String): String {
-        val req = Request.Builder()
-            .url(url)
+    private fun executeGet(url: String, includeDirectory: Boolean = true): String {
+        val req = buildScopedRequestBuilder(url, includeDirectory = includeDirectory)
             .header("Accept", "application/json")
-            .applyOpenCodeAuth()
             .get()
             .build()
         return execute(req)
     }
 
-    private fun executeDelete(url: String): String {
-        val req = Request.Builder()
-            .url(url)
+    private fun executeDelete(url: String, includeDirectory: Boolean = true): String {
+        val req = buildScopedRequestBuilder(url, includeDirectory = includeDirectory)
             .header("Accept", "application/json")
-            .applyOpenCodeAuth()
             .delete()
             .build()
         return execute(req)
     }
 
-    private fun executeJsonRequest(method: String, url: String, payload: JSONObject): String {
+    private fun executeJsonRequest(
+        method: String,
+        url: String,
+        payload: JSONObject,
+        includeDirectory: Boolean = true,
+    ): String {
         val body = payload.toString().toRequestBody(JSON_MEDIA_TYPE)
-        val req = Request.Builder()
-            .url(url)
+        val req = buildScopedRequestBuilder(url, includeDirectory = includeDirectory)
             .header("Accept", "application/json")
-            .applyOpenCodeAuth()
             .method(method, body)
             .build()
         return execute(req)

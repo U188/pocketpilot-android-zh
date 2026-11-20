@@ -25,6 +25,8 @@ data class DiscoveredOpenCodePaths(
     val globalPermissionReplySupported: Boolean = true,
     val sessionPermissionReplySupported: Boolean = true,
     val permissionListSupported: Boolean = true,
+    val directoryQueryParamName: String? = "directory",
+    val directoryHeaderName: String? = "x-opencode-directory",
 )
 
 object OpenCodeJsonParser {
@@ -63,6 +65,8 @@ object OpenCodeJsonParser {
         val sessionPermissionReplySupported = keys.any { it.matches(Regex("^/session/\\{[^}]+\\}/permissions/\\{[^}]+\\}$")) }
         val permissionListSupported = "/permission" in keys
 
+        val (dirQueryParam, dirHeader) = detectDirectoryParameters(root, paths)
+
         return DiscoveredOpenCodePaths(
             messagesListSuffix = messagesSuffix,
             promptAsyncSupported = promptAsync,
@@ -74,7 +78,61 @@ object OpenCodeJsonParser {
             globalPermissionReplySupported = globalPermissionReplySupported,
             sessionPermissionReplySupported = sessionPermissionReplySupported,
             permissionListSupported = permissionListSupported,
+            directoryQueryParamName = dirQueryParam,
+            directoryHeaderName = dirHeader,
         )
+    }
+
+    private fun detectDirectoryParameters(
+        root: JSONObject,
+        paths: JSONObject,
+    ): Pair<String?, String?> {
+        var foundQueryName: String? = null
+        var foundHeaderName: String? = null
+        val componentParams = root.optJSONObject("components")?.optJSONObject("parameters")
+
+        fun inspectParam(rawParam: JSONObject?) {
+            if (rawParam == null) return
+            val param = if (rawParam.has("\$ref")) {
+                val refName = rawParam.optString("\$ref").substringAfterLast('/')
+                componentParams?.optJSONObject(refName) ?: return
+            } else {
+                rawParam
+            }
+            val location = param.optString("in").lowercase()
+            val name = param.optString("name").trim()
+            if (location == "query" && name.equals("directory", ignoreCase = true)) {
+                foundQueryName = name
+            } else if (location == "header" && name.equals("x-opencode-directory", ignoreCase = true)) {
+                foundHeaderName = name
+            }
+        }
+
+        fun inspectParamArray(arr: JSONArray?) {
+            if (arr == null) return
+            for (i in 0 until arr.length()) {
+                inspectParam(arr.optJSONObject(i))
+            }
+        }
+
+        val pathIter = paths.keys()
+        while (pathIter.hasNext()) {
+            val pathKey = pathIter.next()
+            val pathItem = paths.optJSONObject(pathKey) ?: continue
+            inspectParamArray(pathItem.optJSONArray("parameters"))
+            for (method in listOf("get", "post", "put", "patch", "delete")) {
+                val op = pathItem.optJSONObject(method) ?: continue
+                inspectParamArray(op.optJSONArray("parameters"))
+            }
+        }
+
+        // OpenCode's HTTP API supports ?directory=... and x-opencode-directory header.
+        // If /doc declared either explicitly, honor its exact declaration; otherwise fall back to standard defaults.
+        return if (foundQueryName != null || foundHeaderName != null) {
+            foundQueryName to foundHeaderName
+        } else {
+            "directory" to "x-opencode-directory"
+        }
     }
 
     fun parseSessions(rawJson: String): List<OpenCodeSession> {
@@ -159,6 +217,9 @@ object OpenCodeJsonParser {
         val created = normalizeEpochMillis(
             time?.optLong("created") ?: info.optLong("createdAt", System.currentTimeMillis()),
         )
+        val rawCompleted = time?.optLong("completed", 0L)?.takeIf { it > 0L }
+            ?: info.optLong("completedAt", 0L).takeIf { it > 0L }
+        val completed = rawCompleted?.let { normalizeEpochMillis(it) }
         val modelObj = info.optJSONObject("model")
         val providerId = info.optString("providerID").takeIf { it.isNotBlank() }
             ?: modelObj?.optString("providerID")?.takeIf { it.isNotBlank() }
@@ -166,21 +227,49 @@ object OpenCodeJsonParser {
             ?: modelObj?.optString("modelID")?.takeIf { it.isNotBlank() }
         val agent = info.optString("agent").takeIf { it.isNotBlank() }
             ?: info.optString("mode").takeIf { it.isNotBlank() }
-        val errorObj = info.optJSONObject("error")
-        val errorMsg = errorObj?.optJSONObject("data")?.optString("message")?.takeIf { it.isNotBlank() }
-            ?: errorObj?.optString("message")?.takeIf { it.isNotBlank() }
-            ?: errorObj?.optString("name")?.takeIf { it.isNotBlank() }
+        val errorMsg = extractErrorMessage(info)
 
         return OpenCodeMessage(
             id = id,
             sessionId = sessionId,
             role = role,
             createdAtMillis = created,
+            completedAtMillis = completed,
             providerId = providerId,
             modelId = modelId,
             agent = agent,
             error = errorMsg,
         )
+    }
+
+    private fun extractErrorMessage(container: JSONObject): String? {
+        val errorObj = container.optJSONObject("error")
+        if (errorObj != null) {
+            val dataObj = errorObj.optJSONObject("data")
+            val fromData = dataObj?.optString("message")?.takeIf { it.isNotBlank() }
+                ?: dataObj?.optString("error")?.takeIf { it.isNotBlank() }
+            val fromObj = errorObj.optString("message").takeIf { it.isNotBlank() }
+            val name = errorObj.optString("name").takeIf { it.isNotBlank() }
+            val statusCode = dataObj?.optInt("statusCode", 0)?.takeIf { it > 0 }
+                ?: errorObj.optInt("statusCode", 0).takeIf { it > 0 }
+            val body = fromData ?: fromObj
+            return when {
+                body != null && statusCode != null && !body.contains(statusCode.toString()) ->
+                    "HTTP $statusCode: $body"
+                body != null && name != null && !body.startsWith(name, ignoreCase = true) && name != "Error" && name != "UnknownError" ->
+                    "$name: $body"
+                body != null -> body
+                name != null -> name
+                else -> errorObj.toString().takeIf { it != "{}" }
+            }
+        }
+        val raw = container.opt("error")
+        if (raw is String && raw.isNotBlank() && !raw.equals("null", ignoreCase = true)) {
+            return raw.trim()
+        }
+        return container.optString("message").takeIf {
+            it.isNotBlank() && !container.has("id") && !container.has("role")
+        }
     }
 
     fun parsePart(
@@ -471,6 +560,14 @@ object OpenCodeJsonParser {
                     }
                 }
                 OpenCodeEvent.SessionDiffUpdated(sessionId = sessionId, diffs = parsedDiffs)
+            }
+
+            "session.error" -> {
+                val sessionId = props.optString("sessionID").takeIf { it.isNotBlank() }
+                    ?: props.optString("id").takeIf { it.isNotBlank() }
+                val message = extractErrorMessage(props)
+                    ?: "Ошибка сессии OpenCode"
+                OpenCodeEvent.SessionError(sessionId = sessionId, message = message)
             }
 
             else -> null

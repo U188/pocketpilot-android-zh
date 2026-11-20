@@ -5,6 +5,7 @@ import com.example.data.ssh.SshConnectionManager
 import com.example.domain.model.ConfiguredProviderInfo
 import com.example.domain.model.CustomModelEntry
 import com.example.domain.model.CustomProviderSaveRequest
+import com.example.domain.model.InstallStepStatus
 import com.example.domain.model.ModelTestResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -20,6 +21,33 @@ import java.util.concurrent.TimeUnit
 class ServerUnreachableException(
     message: String = OpenCodeConfigHelper.SERVER_UNREACHABLE_MESSAGE,
 ) : IllegalStateException(message)
+
+sealed interface ProviderApplyOutcome {
+    data class Success(
+        val providerId: String? = null,
+        val defaultModelId: String? = null,
+        val tunnelPort: Int? = null,
+        val detail: String = "",
+    ) : ProviderApplyOutcome
+
+    /**
+     * opencode.json was written and opencode-serve is `active`, so the config is NOT rolled back.
+     * The post-restart /session check did not pass within 40s — show warning with "Повторить" / "Продолжить".
+     */
+    data class SavedWithCheckWarning(
+        val providerId: String? = null,
+        val defaultModelId: String? = null,
+        val tunnelPort: Int? = null,
+        val warningMessage: String,
+    ) : ProviderApplyOutcome
+
+    /**
+     * opencode-serve failed to become `active` after restart — opencode.json was rolled back to backup.
+     */
+    data class RolledBackServiceInactive(
+        val errorMessage: String,
+    ) : ProviderApplyOutcome
+}
 
 private data class RemoteCurlResponse(
     val exitCode: Int,
@@ -212,22 +240,25 @@ class OpenCodeProviderManager(
     /**
      * 1) Verifies the remote server can reach baseURL (aborts WITHOUT saving on timeout/unreachability).
      * 2) Safely merges the provider and selected models into ~/.config/opencode/opencode.json (chmod 600).
-     * 3) Restarts opencode-serve and waits for GET /session JSON.
-     * Returns (providerId, defaultModelId) to immediately activate in Chat.
+     * 3) Restarts opencode-serve; ONLY rolls back opencode.json to backup if systemd service fails to become active.
+     * 4) Waits up to 40s (every 2s) for /session with Basic Auth (401 = alive) and SSH tunnel rebuild on drop.
+     *    If health check fails while service IS active, keeps opencode.json and returns SavedWithCheckWarning.
      */
     suspend fun saveProviderAndRestart(
         profileId: Long?,
         request: CustomProviderSaveRequest,
         openCodePort: Int,
         localTunnelPort: Int?,
-    ): Pair<String, String> = withContext(Dispatchers.IO) {
+        onStepUpdate: (stepIndex: Int, status: InstallStepStatus, detail: String?) -> Unit = { _, _, _ -> },
+    ): ProviderApplyOutcome = withContext(Dispatchers.IO) {
         val effectiveKey = resolveEffectiveKeyTransient(
             apiKeyInput = request.apiKey.orEmpty(),
             existingProviderId = request.providerId.takeIf { it.isNotBlank() },
             openCodePort = openCodePort,
         )
 
-        // Requirement 3: verify reachability from server BEFORE modifying opencode.json
+        onStepUpdate(0, InstallStepStatus.RUNNING, "Проверка доступности адреса с сервера…")
+        // Verify reachability from server BEFORE modifying opencode.json
         verifyServerReachable(request.baseUrl, effectiveKey)
 
         val homeDir = resolveHomeDir(openCodePort)
@@ -236,12 +267,13 @@ class OpenCodeProviderManager(
 
         ensureConfigDir(configDir)
 
-        val existing = runCatching {
+        val previousConfig = runCatching {
             sftpRepository.readTextFile(configPath).text
         }.getOrNull()
 
-        val merged = OpenCodeConfigHelper.mergeOpenAiCompatibleProvider(existing, request)
+        val merged = OpenCodeConfigHelper.mergeOpenAiCompatibleProvider(previousConfig, request)
 
+        onStepUpdate(0, InstallStepStatus.RUNNING, "Запись ~/.config/opencode/opencode.json по SFTP…")
         // Write exclusively via SFTP so API key never touches shell commands or logs
         sftpRepository.writeTextFile(
             path = configPath,
@@ -250,13 +282,7 @@ class OpenCodeProviderManager(
             forceOverwrite = true,
         )
         runCatching { sftpRepository.chmod(configPath, 0x180) }
-
-        serverInstaller.restartOpenCodeServer(
-            profileId = profileId,
-            port = openCodePort,
-            localTunnelPort = localTunnelPort,
-            onLog = {},
-        )
+        onStepUpdate(0, InstallStepStatus.SUCCESS, "opencode.json записан (chmod 600)")
 
         val resolvedProviderId = OpenCodeConfigHelper.sanitizeProviderId(
             request.providerId.ifBlank { request.providerName },
@@ -265,12 +291,21 @@ class OpenCodeProviderManager(
             .takeIf { id -> request.selectedModels.any { it.id.trim() == id } }
             ?: request.selectedModels.first().id.trim()
 
-        resolvedProviderId to resolvedDefaultModel
+        restartAndWaitWithSelectiveRollback(
+            profileId = profileId,
+            openCodePort = openCodePort,
+            localTunnelPort = localTunnelPort,
+            configPath = configPath,
+            previousConfig = previousConfig,
+            providerId = resolvedProviderId,
+            defaultModelId = resolvedDefaultModel,
+            onStepUpdate = onStepUpdate,
+        )
     }
 
     /**
      * Rotates ONLY the API key for an existing provider in ~/.config/opencode/opencode.json (chmod 600),
-     * verifies server reachability first, then restarts opencode-serve and waits for /session.
+     * verifies server reachability first, then restarts opencode-serve with selective rollback and 40s wait.
      */
     suspend fun updateProviderKeyAndRestart(
         profileId: Long?,
@@ -279,18 +314,21 @@ class OpenCodeProviderManager(
         newApiKey: String,
         openCodePort: Int,
         localTunnelPort: Int?,
-    ) = withContext(Dispatchers.IO) {
+        onStepUpdate: (stepIndex: Int, status: InstallStepStatus, detail: String?) -> Unit = { _, _, _ -> },
+    ): ProviderApplyOutcome = withContext(Dispatchers.IO) {
         val cleanKey = newApiKey.trim()
         require(cleanKey.isNotEmpty()) { "Введите новый API-ключ" }
 
+        onStepUpdate(0, InstallStepStatus.RUNNING, "Проверка доступа с новым ключом…")
         if (baseUrl.isNotBlank()) {
             verifyServerReachable(baseUrl, cleanKey)
         }
 
         val configPath = resolveConfigPath(openCodePort)
-        val existing = sftpRepository.readTextFile(configPath).text
-        val updated = OpenCodeConfigHelper.updateProviderApiKey(existing, providerId, cleanKey)
+        val previousConfig = sftpRepository.readTextFile(configPath).text
+        val updated = OpenCodeConfigHelper.updateProviderApiKey(previousConfig, providerId, cleanKey)
 
+        onStepUpdate(0, InstallStepStatus.RUNNING, "Обновление ключа в opencode.json по SFTP…")
         sftpRepository.writeTextFile(
             path = configPath,
             text = updated,
@@ -298,28 +336,35 @@ class OpenCodeProviderManager(
             forceOverwrite = true,
         )
         runCatching { sftpRepository.chmod(configPath, 0x180) }
+        onStepUpdate(0, InstallStepStatus.SUCCESS, "Ключ записан в opencode.json (chmod 600)")
 
-        serverInstaller.restartOpenCodeServer(
+        restartAndWaitWithSelectiveRollback(
             profileId = profileId,
-            port = openCodePort,
+            openCodePort = openCodePort,
             localTunnelPort = localTunnelPort,
-            onLog = {},
+            configPath = configPath,
+            previousConfig = previousConfig,
+            providerId = providerId,
+            defaultModelId = null,
+            onStepUpdate = onStepUpdate,
         )
     }
 
     /**
      * Removes a single provider from ~/.config/opencode/opencode.json (chmod 600),
-     * preserves all unrelated settings/providers, restarts opencode-serve and waits for /session.
+     * preserves all unrelated settings/providers, restarts opencode-serve with selective rollback and 40s wait.
      */
     suspend fun deleteProviderAndRestart(
         profileId: Long?,
         providerId: String,
         openCodePort: Int,
         localTunnelPort: Int?,
-    ) = withContext(Dispatchers.IO) {
+        onStepUpdate: (stepIndex: Int, status: InstallStepStatus, detail: String?) -> Unit = { _, _, _ -> },
+    ): ProviderApplyOutcome = withContext(Dispatchers.IO) {
+        onStepUpdate(0, InstallStepStatus.RUNNING, "Обновление opencode.json по SFTP…")
         val configPath = resolveConfigPath(openCodePort)
-        val existing = sftpRepository.readTextFile(configPath).text
-        val updated = OpenCodeConfigHelper.removeProvider(existing, providerId)
+        val previousConfig = sftpRepository.readTextFile(configPath).text
+        val updated = OpenCodeConfigHelper.removeProvider(previousConfig, providerId)
 
         sftpRepository.writeTextFile(
             path = configPath,
@@ -328,13 +373,151 @@ class OpenCodeProviderManager(
             forceOverwrite = true,
         )
         runCatching { sftpRepository.chmod(configPath, 0x180) }
+        onStepUpdate(0, InstallStepStatus.SUCCESS, "Провайдер удалён из opencode.json")
 
-        serverInstaller.restartOpenCodeServer(
+        restartAndWaitWithSelectiveRollback(
             profileId = profileId,
-            port = openCodePort,
+            openCodePort = openCodePort,
             localTunnelPort = localTunnelPort,
-            onLog = {},
+            configPath = configPath,
+            previousConfig = previousConfig,
+            providerId = null,
+            defaultModelId = null,
+            onStepUpdate = onStepUpdate,
         )
+    }
+
+    /**
+     * Retries the 40-second server readiness check without modifying opencode.json.
+     */
+    suspend fun retryServerHealthCheck(
+        profileId: Long?,
+        localTunnelPort: Int?,
+        providerId: String?,
+        defaultModelId: String?,
+        onStepUpdate: (stepIndex: Int, status: InstallStepStatus, detail: String?) -> Unit,
+    ): ProviderApplyOutcome = withContext(Dispatchers.IO) {
+        onStepUpdate(2, InstallStepStatus.RUNNING, "Повторное ожидание ответа сервера (до 40 с)…")
+        val ready = serverInstaller.waitForServerReadyAfterRestart(
+            profileId = profileId,
+            isUserService = null,
+            initialTunnelPort = localTunnelPort,
+            onProgress = { msg -> onStepUpdate(2, InstallStepStatus.RUNNING, msg) },
+        )
+        if (ready.serverAlive) {
+            onStepUpdate(2, InstallStepStatus.SUCCESS, ready.detail)
+            ProviderApplyOutcome.Success(
+                providerId = providerId,
+                defaultModelId = defaultModelId,
+                tunnelPort = ready.activeTunnelPort,
+                detail = ready.detail,
+            )
+        } else {
+            onStepUpdate(2, InstallStepStatus.ERROR, ready.detail)
+            ProviderApplyOutcome.SavedWithCheckWarning(
+                providerId = providerId,
+                defaultModelId = defaultModelId,
+                tunnelPort = ready.activeTunnelPort,
+                warningMessage = "Конфиг opencode.json сохранён и не откатывался, но сервер не ответил на /session за 40 с (${ready.detail}). Вы можете повторить проверку или продолжить.",
+            )
+        }
+    }
+
+    private suspend fun restartAndWaitWithSelectiveRollback(
+        profileId: Long?,
+        openCodePort: Int,
+        localTunnelPort: Int?,
+        configPath: String,
+        previousConfig: String?,
+        providerId: String?,
+        defaultModelId: String?,
+        onStepUpdate: (stepIndex: Int, status: InstallStepStatus, detail: String?) -> Unit,
+    ): ProviderApplyOutcome {
+        // Step 1: Restart opencode-serve and verify it transitions to active
+        onStepUpdate(1, InstallStepStatus.RUNNING, "Перезапуск службы opencode-serve…")
+        val restartRes = runCatching {
+            serverInstaller.restartServiceAndCheckActive(port = openCodePort)
+        }.getOrElse { err ->
+            onStepUpdate(1, InstallStepStatus.ERROR, err.message ?: "Ошибка перезапуска службы")
+            val rollbackNote = rollbackConfigToBackup(configPath, previousConfig, openCodePort)
+            return ProviderApplyOutcome.RolledBackServiceInactive(
+                errorMessage = "Служба opencode-serve не перешла в active после перезапуска (${err.message ?: "ошибка"}). $rollbackNote",
+            )
+        }
+
+        if (!restartRes.serviceActive) {
+            onStepUpdate(1, InstallStepStatus.ERROR, restartRes.detail)
+            val rollbackNote = rollbackConfigToBackup(configPath, previousConfig, openCodePort)
+            return ProviderApplyOutcome.RolledBackServiceInactive(
+                errorMessage = "Служба opencode-serve не стала active (${restartRes.stateText}). $rollbackNote",
+            )
+        }
+        onStepUpdate(1, InstallStepStatus.SUCCESS, restartRes.detail)
+
+        // Step 2: Poll GET /session every 2s for 40s (Basic Auth, 401 = alive, rebuild SSH tunnel on drop)
+        onStepUpdate(2, InstallStepStatus.RUNNING, "Ожидание ответа GET /session (до 40 с)…")
+        val ready = serverInstaller.waitForServerReadyAfterRestart(
+            profileId = profileId,
+            isUserService = restartRes.isUserService,
+            initialTunnelPort = localTunnelPort,
+            onProgress = { msg -> onStepUpdate(2, InstallStepStatus.RUNNING, msg) },
+        )
+
+        if (!ready.serviceActive) {
+            onStepUpdate(1, InstallStepStatus.ERROR, "Служба остановилась после запуска")
+            onStepUpdate(2, InstallStepStatus.ERROR, ready.detail)
+            val rollbackNote = rollbackConfigToBackup(configPath, previousConfig, openCodePort)
+            return ProviderApplyOutcome.RolledBackServiceInactive(
+                errorMessage = "Служба opencode-serve не удержалась в состоянии active (${ready.detail}). $rollbackNote",
+            )
+        }
+
+        if (ready.serverAlive) {
+            onStepUpdate(2, InstallStepStatus.SUCCESS, ready.detail)
+            return ProviderApplyOutcome.Success(
+                providerId = providerId,
+                defaultModelId = defaultModelId,
+                tunnelPort = ready.activeTunnelPort,
+                detail = ready.detail,
+            )
+        }
+
+        // Config was written AND opencode-serve IS active -> DO NOT ROLL BACK!
+        onStepUpdate(2, InstallStepStatus.ERROR, "Таймаут 40 с: ${ready.detail}")
+        return ProviderApplyOutcome.SavedWithCheckWarning(
+            providerId = providerId,
+            defaultModelId = defaultModelId,
+            tunnelPort = ready.activeTunnelPort,
+            warningMessage = "Файл ~/.config/opencode/opencode.json успешно записан, служба opencode-serve активна (active), но автопроверка /session не прошла за 40 с (${ready.detail}). Конфиг сохранён без отката.",
+        )
+    }
+
+    private suspend fun rollbackConfigToBackup(
+        configPath: String,
+        previousConfig: String?,
+        openCodePort: Int,
+    ): String {
+        val restored = runCatching {
+            if (previousConfig != null) {
+                sftpRepository.writeTextFile(
+                    path = configPath,
+                    text = previousConfig,
+                    expectedMtimeEpochSec = null,
+                    forceOverwrite = true,
+                )
+                runCatching { sftpRepository.chmod(configPath, 0x180) }
+            } else {
+                sftpRepository.deletePath(configPath, isDirectory = false)
+            }
+            // Best-effort restart with restored config
+            runCatching { serverInstaller.restartServiceAndCheckActive(port = openCodePort) }
+        }.isSuccess
+
+        return if (restored) {
+            "Выполнен откат ~/.config/opencode/opencode.json к резервной копии и повторный перезапуск службы."
+        } else {
+            "Не удалось автоматически восстановить резервную копию opencode.json — проверьте файл вручную."
+        }
     }
 
     private suspend fun resolveEffectiveKeyTransient(

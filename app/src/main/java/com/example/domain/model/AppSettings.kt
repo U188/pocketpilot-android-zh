@@ -24,4 +24,6 @@ data class AppSettings(
     val lastChatDraft: String = "",
     val autoCheckUpdates: Boolean = true,
     val lastUpdateCheckEpochMs: Long = 0L,
+    val activeWorkspaceByProfile: Map<Long, String> = emptyMap(),
+    val recentWorkspacesByProfile: Map<Long, List<String>> = emptyMap(),
 )

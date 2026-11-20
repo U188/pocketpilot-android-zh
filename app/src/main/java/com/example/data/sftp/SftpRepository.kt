@@ -151,6 +151,10 @@ class SftpRepository(
         }
     }
 
+    suspend fun deletePath(path: String, isDirectory: Boolean = false) = withSftp { sftp ->
+        deleteRecursive(sftp, normalizeRemotePath(path), isDirectory)
+    }
+
     suspend fun chmod(path: String, permissionsMask: Int) = withSftp { sftp ->
         sftp.chmod(normalizeRemotePath(path), permissionsMask and 0xFFF)
     }

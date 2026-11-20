@@ -129,6 +129,19 @@ data class CustomProviderConfig(
     val modelDisplayName: String,
 )
 
+data class ProviderSaveStepItem(
+    val id: String,
+    val title: String,
+    val status: InstallStepStatus = InstallStepStatus.PENDING,
+    val detail: String? = null,
+)
+
+data class ProviderSaveWarning(
+    val message: String,
+    val providerId: String? = null,
+    val defaultModelId: String? = null,
+)
+
 data class OpenCodeSetupUiState(
     val serverStatus: OpenCodeServerStatus = OpenCodeServerStatus.CHECKING,
     val wizardStage: SetupWizardStage = SetupWizardStage.IDLE,
@@ -148,6 +161,10 @@ data class OpenCodeSetupUiState(
     val isLoadingConfiguredProviders: Boolean = false,
     val configuredProvidersError: String? = null,
     val isProviderActionBusy: Boolean = false,
+    // Step-by-step progress & non-rollback health-check warning when applying provider changes
+    val providerSaveSteps: List<ProviderSaveStepItem> = emptyList(),
+    val providerSaveWarning: ProviderSaveWarning? = null,
+    val isRetryingProviderCheck: Boolean = false,
     // Editor state for creating/editing a custom OpenAI-compatible provider
     val editingProviderId: String? = null,
     val editingMaskedApiKey: String? = null,
