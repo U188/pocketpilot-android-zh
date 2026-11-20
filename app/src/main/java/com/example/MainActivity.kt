@@ -27,9 +27,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.crash.CrashReporter
 import com.example.domain.model.AppSettings
 import com.example.domain.model.SshConnectionState
 import com.example.security.BiometricAuthHelper
+import com.example.ui.crash.CrashReportScreen
 import com.example.ui.navigation.OpenCodeNavHost
 import com.example.ui.security.BiometricLockScreen
 import com.example.ui.theme.OpenCodeTheme
@@ -49,6 +51,9 @@ class MainActivity : FragmentActivity() {
             val connectionState by container.sshConnectionManager.connectionState
                 .collectAsStateWithLifecycle()
 
+            var pendingCrash by remember {
+                mutableStateOf(CrashReporter.readPendingCrash(this@MainActivity))
+            }
             var isLocked by remember { mutableStateOf(false) }
             var initialLockChecked by remember { mutableStateOf(false) }
             var authErrorMessage by remember { mutableStateOf<String?>(null) }
@@ -68,8 +73,9 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Lock on cold launch if biometric lock is enabled
-            LaunchedEffect(settings.biometricLockEnabled) {
+            // Lock on cold launch if biometric lock is enabled (skip while showing crash report)
+            LaunchedEffect(settings.biometricLockEnabled, pendingCrash) {
+                if (pendingCrash != null) return@LaunchedEffect
                 if (!initialLockChecked && settings.biometricLockEnabled) {
                     initialLockChecked = true
                     if (BiometricAuthHelper.canAuthenticate(this@MainActivity)) {
@@ -80,12 +86,12 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Request POST_NOTIFICATIONS once on Android 13+ when SSH connects with keep-alive enabled
+            // Request POST_NOTIFICATIONS once on Android 13+ after SSH connects with keep-alive enabled
             LaunchedEffect(connectionState, settings.keepAliveInBackground) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                     settings.keepAliveInBackground &&
                     !askedNotifThisSession &&
-                    (connectionState is SshConnectionState.Connecting || connectionState is SshConnectionState.Connected)
+                    connectionState is SshConnectionState.Connected
                 ) {
                     val granted = ContextCompat.checkSelfPermission(
                         this@MainActivity,
@@ -93,7 +99,9 @@ class MainActivity : FragmentActivity() {
                     ) == PackageManager.PERMISSION_GRANTED
                     if (!granted) {
                         askedNotifThisSession = true
-                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        runCatching {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
                     }
                 }
             }
@@ -157,14 +165,25 @@ class MainActivity : FragmentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        OpenCodeNavHost(container = container)
+                    val crash = pendingCrash
+                    if (crash != null) {
+                        CrashReportScreen(
+                            report = crash,
+                            onContinue = {
+                                CrashReporter.clearPendingCrash(this@MainActivity)
+                                pendingCrash = null
+                            },
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            OpenCodeNavHost(container = container)
 
-                        if (isLocked && settings.biometricLockEnabled) {
-                            BiometricLockScreen(
-                                errorMessage = authErrorMessage,
-                                onUnlockClick = triggerBiometricPrompt,
-                            )
+                            if (isLocked && settings.biometricLockEnabled) {
+                                BiometricLockScreen(
+                                    errorMessage = authErrorMessage,
+                                    onUnlockClick = triggerBiometricPrompt,
+                                )
+                            }
                         }
                     }
                 }

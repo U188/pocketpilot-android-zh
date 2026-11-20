@@ -1,5 +1,6 @@
 package com.example.data.ssh
 
+import android.os.NetworkOnMainThreadException
 import com.example.data.local.AppPreferencesRepository
 import com.example.data.network.NetworkMonitor
 import com.example.data.repository.KnownHostsRepository
@@ -12,6 +13,7 @@ import com.example.domain.model.ServerSecrets
 import com.example.domain.model.SshConnectionState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,7 +25,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.DisconnectReason
 import net.schmizz.sshj.transport.DisconnectListener
@@ -34,6 +35,8 @@ import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.security.GeneralSecurityException
+import java.security.NoSuchAlgorithmException
 import kotlin.math.min
 
 class SshConnectionManager(
@@ -42,7 +45,22 @@ class SshConnectionManager(
     private val preferencesRepository: AppPreferencesRepository,
     private val networkMonitor: NetworkMonitor? = null,
 ) {
-    private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val _connectionState = MutableStateFlow<SshConnectionState>(SshConnectionState.Disconnected)
+    val connectionState: StateFlow<SshConnectionState> = _connectionState.asStateFlow()
+
+    private val _testState = MutableStateFlow<ConnectionTestState>(ConnectionTestState.Idle)
+    val testState: StateFlow<ConnectionTestState> = _testState.asStateFlow()
+
+    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        if (throwable is CancellationException) return@CoroutineExceptionHandler
+        val activeProfile = extractProfile(_connectionState.value)
+        _connectionState.value = SshConnectionState.Error(
+            profile = activeProfile,
+            message = mapSshError(throwable),
+        )
+    }
+
+    private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
     init {
         networkMonitor?.let { monitor ->
@@ -69,12 +87,6 @@ class SshConnectionManager(
             }
         }
     }
-
-    private val _connectionState = MutableStateFlow<SshConnectionState>(SshConnectionState.Disconnected)
-    val connectionState: StateFlow<SshConnectionState> = _connectionState.asStateFlow()
-
-    private val _testState = MutableStateFlow<ConnectionTestState>(ConnectionTestState.Idle)
-    val testState: StateFlow<ConnectionTestState> = _testState.asStateFlow()
 
     @Volatile
     private var activeSshClient: SSHClient? = null
@@ -104,29 +116,47 @@ class SshConnectionManager(
         reconnectJob?.cancel()
         activeConnectJob?.cancel()
 
-        activeConnectJob = managerScope.launch {
-            val profile = profileRepository.getProfile(profileId)
-            if (profile == null) {
+        activeConnectJob = managerScope.launch(Dispatchers.IO) {
+            var loadedProfile: ServerProfile? = null
+            try {
+                val profile = profileRepository.getProfile(profileId)
+                if (profile == null) {
+                    _connectionState.value = SshConnectionState.Error(
+                        profile = null,
+                        message = "Профиль сервера не найден",
+                    )
+                    return@launch
+                }
+                loadedProfile = profile
+                if (profile.host.isBlank()) {
+                    _connectionState.value = SshConnectionState.Error(
+                        profile = profile,
+                        message = "Не указан адрес сервера (хост/IP).",
+                    )
+                    return@launch
+                }
+                if (profile.username.isBlank()) {
+                    _connectionState.value = SshConnectionState.Error(
+                        profile = profile,
+                        message = "Не указано имя пользователя SSH.",
+                    )
+                    return@launch
+                }
+                val secrets = profileRepository.getSecrets(profileId)
+                performConnect(profile, secrets)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
                 _connectionState.value = SshConnectionState.Error(
-                    profile = null,
-                    message = "Профиль сервера не найден",
+                    profile = loadedProfile,
+                    message = mapSshError(t),
                 )
-                return@launch
             }
-            val secrets = profileRepository.getSecrets(profileId)
-            performConnect(profile, secrets)
         }
     }
 
     fun reconnectActive() {
-        val currentProfile = when (val state = _connectionState.value) {
-            is SshConnectionState.Connected -> state.profile
-            is SshConnectionState.Reconnecting -> state.profile
-            is SshConnectionState.Error -> state.profile
-            is SshConnectionState.Connecting -> state.profile
-            is SshConnectionState.AwaitingHostKeyVerification -> state.profile
-            SshConnectionState.Disconnected -> null
-        } ?: return
+        val currentProfile = extractProfile(_connectionState.value) ?: return
         connect(currentProfile.id)
     }
 
@@ -138,7 +168,7 @@ class SshConnectionManager(
         reconnectJob = null
         activeConnectJob?.cancel()
         activeConnectJob = null
-        closeActiveResources()
+        closeActiveResourcesAsync()
         _connectionState.value = SshConnectionState.Disconnected
     }
 
@@ -154,7 +184,7 @@ class SshConnectionManager(
 
     fun testConnection(profile: ServerProfile, secrets: ServerSecrets) {
         cancelConnectionTest()
-        testJob = managerScope.launch {
+        testJob = managerScope.launch(Dispatchers.IO) {
             _testState.value = ConnectionTestState.Testing
             var client: SSHClient? = null
             var tunnel: SshTunnelForwarder? = null
@@ -175,7 +205,7 @@ class SshConnectionManager(
                     },
                 )
                 val latencyMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
-                val banner = client.transport.serverVersion
+                val banner = runCatching { client.transport.serverVersion }.getOrNull()
                 tunnel = SshTunnelForwarder.start(client, profile.openCodePort, this)
                 val openCodeReachable = SshTunnelForwarder.probeTunnelEndpoint(tunnel.localPort)
                 _testState.value = ConnectionTestState.Success(
@@ -192,9 +222,7 @@ class SshConnectionManager(
             } finally {
                 pendingTestHostKeyDecision?.complete(false)
                 pendingTestHostKeyDecision = null
-                runCatching { tunnel?.close() }
-                runCatching { client?.disconnect() }
-                runCatching { client?.close() }
+                closeResourcesSafely(tunnel, client)
             }
         }
     }
@@ -215,8 +243,8 @@ class SshConnectionManager(
         }
     }
 
-    private suspend fun performConnect(profile: ServerProfile, secrets: ServerSecrets) {
-        closeActiveResources()
+    private suspend fun performConnect(profile: ServerProfile, secrets: ServerSecrets) = withContext(Dispatchers.IO) {
+        closeActiveResourcesBlocking()
         _connectionState.value = SshConnectionState.Connecting(profile)
 
         var newClient: SSHClient? = null
@@ -242,7 +270,9 @@ class SshConnectionManager(
             )
             val latencyMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
 
-            newClient.connection.keepAlive.keepAliveInterval = KEEP_ALIVE_INTERVAL_SEC
+            runCatching {
+                newClient.connection.keepAlive.keepAliveInterval = KEEP_ALIVE_INTERVAL_SEC
+            }
             newTunnel = SshTunnelForwarder.start(newClient, profile.openCodePort, managerScope)
             val openCodeReachable = SshTunnelForwarder.probeTunnelEndpoint(newTunnel.localPort)
 
@@ -251,26 +281,22 @@ class SshConnectionManager(
             activeSshClient = newClient
             activeTunnel = newTunnel
 
-            profileRepository.markConnected(profile.id)
-            preferencesRepository.setLastActiveProfileId(profile.id)
+            runCatching { profileRepository.markConnected(profile.id) }
+            runCatching { preferencesRepository.setLastActiveProfileId(profile.id) }
 
             _connectionState.value = SshConnectionState.Connected(
                 profile = profile.copy(lastConnectedAt = System.currentTimeMillis()),
                 localTunnelPort = newTunnel.localPort,
                 connectedAtMillis = System.currentTimeMillis(),
                 latencyMs = latencyMs,
-                serverVersion = newClient.transport.serverVersion,
+                serverVersion = runCatching { newClient.transport.serverVersion }.getOrNull(),
                 openCodePortReachable = openCodeReachable,
             )
         } catch (cancelled: CancellationException) {
-            runCatching { newTunnel?.close() }
-            runCatching { newClient?.disconnect() }
-            runCatching { newClient?.close() }
+            closeResourcesSafely(newTunnel, newClient)
             throw cancelled
         } catch (t: Throwable) {
-            runCatching { newTunnel?.close() }
-            runCatching { newClient?.disconnect() }
-            runCatching { newClient?.close() }
+            closeResourcesSafely(newTunnel, newClient)
             _connectionState.value = SshConnectionState.Error(
                 profile = profile,
                 message = mapSshError(t),
@@ -279,23 +305,29 @@ class SshConnectionManager(
     }
 
     private fun attachDisconnectWatcher(client: SSHClient, profile: ServerProfile) {
-        client.transport.disconnectListener = DisconnectListener { reason, message ->
-            if (manualDisconnectRequested || activeSshClient !== client) return@DisconnectListener
-            closeActiveResources()
-            if (profile.autoReconnect && reason != DisconnectReason.BY_APPLICATION) {
-                scheduleReconnect(profile, message)
-            } else {
-                _connectionState.value = SshConnectionState.Error(
-                    profile = profile,
-                    message = message?.takeIf { it.isNotBlank() } ?: "Соединение разорвано сервером",
-                )
+        runCatching {
+            client.transport.disconnectListener = DisconnectListener { reason, message ->
+                if (manualDisconnectRequested || activeSshClient !== client) return@DisconnectListener
+                // Offload cleanup from SSHJ's Reader thread to avoid re-entrant deadlocks or uncaught errors.
+                managerScope.launch(Dispatchers.IO) {
+                    if (manualDisconnectRequested || activeSshClient !== client) return@launch
+                    closeActiveResourcesBlocking()
+                    if (profile.autoReconnect && reason != DisconnectReason.BY_APPLICATION) {
+                        scheduleReconnect(profile, message)
+                    } else {
+                        _connectionState.value = SshConnectionState.Error(
+                            profile = profile,
+                            message = message?.takeIf { it.isNotBlank() } ?: "Соединение разорвано сервером",
+                        )
+                    }
+                }
             }
         }
     }
 
     private fun scheduleReconnect(profile: ServerProfile, lastError: String?) {
         reconnectJob?.cancel()
-        reconnectJob = managerScope.launch {
+        reconnectJob = managerScope.launch(Dispatchers.IO) {
             var attempt = 1
             while (isActive && !manualDisconnectRequested) {
                 _connectionState.value = SshConnectionState.Reconnecting(
@@ -307,8 +339,8 @@ class SshConnectionManager(
                 delay(backoffMs)
                 if (manualDisconnectRequested) break
 
-                val freshProfile = profileRepository.getProfile(profile.id) ?: break
-                val secrets = profileRepository.getSecrets(profile.id)
+                val freshProfile = runCatching { profileRepository.getProfile(profile.id) }.getOrNull() ?: break
+                val secrets = runCatching { profileRepository.getSecrets(profile.id) }.getOrDefault(ServerSecrets())
                 performConnect(freshProfile, secrets)
                 if (_connectionState.value is SshConnectionState.Connected) {
                     break
@@ -323,9 +355,9 @@ class SshConnectionManager(
         secrets: ServerSecrets,
         onPromptHostKey: suspend (HostKeyPrompt) -> Boolean,
     ): SSHClient = withContext(Dispatchers.IO) {
-        SshSecurityProvider.ensureInitialized()
+        val config = SshSecurityProvider.createSshConfig()
 
-        val client = SSHClient(DefaultConfig()).apply {
+        val client = SSHClient(config).apply {
             connectTimeout = CONNECT_TIMEOUT_MS
             timeout = SOCKET_TIMEOUT_MS
             addHostKeyVerifier(
@@ -358,21 +390,44 @@ class SshConnectionManager(
             }
             client
         } catch (t: Throwable) {
-            runCatching { client.disconnect() }
-            runCatching { client.close() }
+            closeResourcesSafely(null, client)
             throw t
         }
     }
 
-    private fun closeActiveResources() {
+    private fun closeActiveResourcesAsync() {
         val tunnel = activeTunnel
         activeTunnel = null
-        runCatching { tunnel?.close() }
-
         val client = activeSshClient
         activeSshClient = null
+        if (tunnel != null || client != null) {
+            managerScope.launch(Dispatchers.IO) {
+                closeResourcesSafely(tunnel, client)
+            }
+        }
+    }
+
+    private fun closeActiveResourcesBlocking() {
+        val tunnel = activeTunnel
+        activeTunnel = null
+        val client = activeSshClient
+        activeSshClient = null
+        closeResourcesSafely(tunnel, client)
+    }
+
+    private fun closeResourcesSafely(tunnel: SshTunnelForwarder?, client: SSHClient?) {
+        runCatching { tunnel?.close() }
         runCatching { client?.disconnect() }
         runCatching { client?.close() }
+    }
+
+    private fun extractProfile(state: SshConnectionState): ServerProfile? = when (state) {
+        is SshConnectionState.Connected -> state.profile
+        is SshConnectionState.Connecting -> state.profile
+        is SshConnectionState.AwaitingHostKeyVerification -> state.profile
+        is SshConnectionState.Reconnecting -> state.profile
+        is SshConnectionState.Error -> state.profile
+        SshConnectionState.Disconnected -> null
     }
 
     private fun mapSshError(t: Throwable): String {
@@ -386,14 +441,29 @@ class SshConnectionManager(
                 "Нет маршрута к серверу. Проверьте сеть или VPN."
             root is SocketTimeoutException ->
                 "Превышено время ожидания ответа от сервера."
+            root is SecurityException ->
+                "Ошибка доступа сети или безопасности: ${root.message ?: root.javaClass.simpleName}"
+            root is NetworkOnMainThreadException ->
+                "Сетевая ошибка потока выполнения. Попробуйте подключиться снова."
+            root is NoSuchAlgorithmException || root is GeneralSecurityException ->
+                "Ошибка криптопровайдера SSH: ${root.message ?: root.javaClass.simpleName}"
+            root is LinkageError ->
+                "Ошибка совместимости SSH-библиотеки: ${root.javaClass.simpleName}: ${root.message.orEmpty()}"
             t is UserAuthException ->
                 "Ошибка авторизации SSH: неверный логин, пароль или ключ."
             t is TransportException && t.disconnectReason == DisconnectReason.HOST_KEY_NOT_VERIFIABLE ->
                 "Ключ хоста не подтверждён пользователем."
             t is IllegalStateException && !t.message.isNullOrBlank() ->
                 t.message!!
-            else ->
-                t.message?.takeIf { it.isNotBlank() } ?: "Не удалось установить SSH-соединение"
+            else -> {
+                val detail = t.message?.takeIf { it.isNotBlank() }
+                    ?: root.message?.takeIf { it.isNotBlank() }
+                if (detail != null) {
+                    "Ошибка SSH (${root.javaClass.simpleName}): $detail"
+                } else {
+                    "Не удалось установить SSH-соединение (${root.javaClass.simpleName})"
+                }
+            }
         }
     }
 

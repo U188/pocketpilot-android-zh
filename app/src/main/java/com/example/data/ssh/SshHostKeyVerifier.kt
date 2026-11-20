@@ -17,50 +17,54 @@ class SshHostKeyVerifier(
 ) : HostKeyVerifier {
 
     override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {
-        val hostPortKey = "$hostname:$port"
-        val keyType = KeyType.fromKey(key)
-        val algorithm = keyType.toString()
-        val wireBytes = Buffer.PlainBuffer().putPublicKey(key).compactData
-        val sha256Digest = MessageDigest.getInstance("SHA-256").digest(wireBytes)
-        val fingerprint = "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(sha256Digest)
-        val publicKeyBase64 = Base64.getEncoder().encodeToString(wireBytes)
+        return runCatching {
+            val hostPortKey = "$hostname:$port"
+            val keyType = KeyType.fromKey(key)
+            val algorithm = keyType.toString()
+            val wireBytes = Buffer.PlainBuffer().putPublicKey(key).compactData
+            val sha256Digest = MessageDigest.getInstance("SHA-256").digest(wireBytes)
+            val fingerprint = "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(sha256Digest)
+            val publicKeyBase64 = Base64.getEncoder().encodeToString(wireBytes)
 
-        return runBlocking {
-            val existing = knownHostsRepository.find(hostPortKey)
-            if (existing != null && existing.fingerprintSha256 == fingerprint) {
-                knownHostsRepository.touch(hostPortKey)
-                return@runBlocking true
-            }
+            runBlocking {
+                val existing = knownHostsRepository.find(hostPortKey)
+                if (existing != null && existing.fingerprintSha256 == fingerprint) {
+                    knownHostsRepository.touch(hostPortKey)
+                    return@runBlocking true
+                }
 
-            val prompt = HostKeyPrompt(
-                host = hostname,
-                port = port,
-                algorithm = algorithm,
-                sha256Fingerprint = fingerprint,
-                existingFingerprint = existing?.fingerprintSha256,
-            )
-
-            val approved = onRequestUserApproval(prompt)
-            if (approved) {
-                val now = System.currentTimeMillis()
-                knownHostsRepository.trust(
-                    KnownHost(
-                        hostPortKey = hostPortKey,
-                        algorithm = algorithm,
-                        fingerprintSha256 = fingerprint,
-                        publicKeyBase64 = publicKeyBase64,
-                        firstSeenAt = existing?.firstSeenAt ?: now,
-                        lastVerifiedAt = now,
-                    ),
+                val prompt = HostKeyPrompt(
+                    host = hostname,
+                    port = port,
+                    algorithm = algorithm,
+                    sha256Fingerprint = fingerprint,
+                    existingFingerprint = existing?.fingerprintSha256,
                 )
+
+                val approved = onRequestUserApproval(prompt)
+                if (approved) {
+                    val now = System.currentTimeMillis()
+                    knownHostsRepository.trust(
+                        KnownHost(
+                            hostPortKey = hostPortKey,
+                            algorithm = algorithm,
+                            fingerprintSha256 = fingerprint,
+                            publicKeyBase64 = publicKeyBase64,
+                            firstSeenAt = existing?.firstSeenAt ?: now,
+                            lastVerifiedAt = now,
+                        ),
+                    )
+                }
+                approved
             }
-            approved
-        }
+        }.getOrDefault(false)
     }
 
     override fun findExistingAlgorithms(hostname: String, port: Int): List<String> {
-        val hostPortKey = "$hostname:$port"
-        val existing = runBlocking { knownHostsRepository.find(hostPortKey) }
-        return if (existing != null) listOf(existing.algorithm) else emptyList()
+        return runCatching {
+            val hostPortKey = "$hostname:$port"
+            val existing = runBlocking { knownHostsRepository.find(hostPortKey) }
+            if (existing != null) listOf(existing.algorithm) else emptyList()
+        }.getOrDefault(emptyList())
     }
 }

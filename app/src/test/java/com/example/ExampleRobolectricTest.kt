@@ -354,4 +354,34 @@ class ExampleRobolectricTest {
         assertFalse(defaults.secureScreenEnabled)
         assertEquals("opencode_ssh_channel", SshConnectionForegroundService.CHANNEL_ID)
     }
+
+    @Test
+    fun `ssh security provider creates android-safe sshj client config without throwing`() {
+        val config = com.example.data.ssh.SshSecurityProvider.createSshConfig()
+        val client = net.schmizz.sshj.SSHClient(config)
+        assertNotNull(client)
+        client.close()
+    }
+
+    @Test
+    fun `crash reporter persists reads and clears uncaught stack traces`() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        com.example.crash.CrashReporter.clearPendingCrash(context)
+        assertEquals(null, com.example.crash.CrashReporter.readPendingCrash(context))
+
+        com.example.crash.CrashReporter.saveCrash(
+            context = context,
+            threadName = "ssh-worker",
+            throwable = IllegalStateException("Simulated SSH provider failure"),
+        )
+
+        val saved = com.example.crash.CrashReporter.readPendingCrash(context)
+        assertNotNull(saved)
+        assertEquals("ssh-worker", saved!!.threadName)
+        assertTrue(saved.exceptionTitle.contains("Simulated SSH provider failure"))
+        assertTrue(saved.stackTrace.contains("IllegalStateException"))
+
+        com.example.crash.CrashReporter.clearPendingCrash(context)
+        assertEquals(null, com.example.crash.CrashReporter.readPendingCrash(context))
+    }
 }

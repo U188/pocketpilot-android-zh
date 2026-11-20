@@ -34,7 +34,7 @@ class SshConnectionForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        ensureNotificationChannel()
+        runCatching { ensureNotificationChannel() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -45,15 +45,23 @@ class SshConnectionForegroundService : Service() {
         }
 
         if (intent?.action == ACTION_DISCONNECT) {
-            app.container.sshConnectionManager.disconnect()
+            runCatching { app.container.sshConnectionManager.disconnect() }
             stopForegroundAndSelf()
             return START_NOT_STICKY
         }
 
         val currentState = app.container.sshConnectionManager.connectionState.value
-        promoteToForeground(buildNotification(currentState))
-        observeConnectionState(app.container.sshConnectionManager)
+        val startedInForeground = runCatching {
+            promoteToForeground(buildNotification(currentState))
+            true
+        }.getOrDefault(false)
 
+        if (!startedInForeground) {
+            runCatching { stopSelf() }
+            return START_NOT_STICKY
+        }
+
+        observeConnectionState(app.container.sshConnectionManager)
         return START_NOT_STICKY
     }
 
@@ -75,8 +83,10 @@ class SshConnectionForegroundService : Service() {
                     is SshConnectionState.Reconnecting,
                     is SshConnectionState.AwaitingHostKeyVerification,
                     -> {
-                        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                        nm.notify(NOTIFICATION_ID, buildNotification(state))
+                        runCatching {
+                            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            nm.notify(NOTIFICATION_ID, buildNotification(state))
+                        }
                     }
 
                     SshConnectionState.Disconnected,
@@ -103,8 +113,8 @@ class SshConnectionForegroundService : Service() {
     }
 
     private fun stopForegroundAndSelf() {
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
+        runCatching { stopSelf() }
     }
 
     private fun ensureNotificationChannel() {
@@ -175,7 +185,7 @@ class SshConnectionForegroundService : Service() {
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification_ssh)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(openAppPending)
@@ -218,6 +228,7 @@ class SshConnectionForegroundService : Service() {
 /**
  * Automatically starts and stops [SshConnectionForegroundService] based on SSH session state
  * and the user's background keep-alive preference.
+ * Starts only once a connection is established (avoiding rapid start/stop FGS crashes on fast failures).
  */
 class SshForegroundServiceController(
     private val context: Context,
@@ -236,11 +247,14 @@ class SshForegroundServiceController(
                 connectionManager.connectionState,
                 preferencesRepository.settings,
             ) { connState, settings ->
-                val activeConnection = connState is SshConnectionState.Connected ||
-                    connState is SshConnectionState.Connecting ||
-                    connState is SshConnectionState.Reconnecting ||
-                    connState is SshConnectionState.AwaitingHostKeyVerification
-                activeConnection && settings.keepAliveInBackground
+                val shouldStart = connState is SshConnectionState.Connected && settings.keepAliveInBackground
+                val shouldKeepAlive = serviceRequested &&
+                    settings.keepAliveInBackground &&
+                    (connState is SshConnectionState.Connected ||
+                        connState is SshConnectionState.Reconnecting ||
+                        connState is SshConnectionState.Connecting ||
+                        connState is SshConnectionState.AwaitingHostKeyVerification)
+                shouldStart || shouldKeepAlive
             }.collect { shouldRun ->
                 if (shouldRun && !serviceRequested) {
                     serviceRequested = true

@@ -386,4 +386,10 @@
     <string name="biometric_auth_failed">Не удалось подтвердить личность. Попробуйте ещё раз.</string>
 
     <string name="workspace_offline_banner">Нет подключения к интернету — ожидание сети для восстановления SSH</string>
+
+    <string name="crash_screen_title">Приложение закрылось</string>
+    <string name="crash_screen_subtitle">При предыдущем запуске произошла непредвиденная ошибка. Вы можете скопировать отчёт для диагностики.</string>
+    <string name="crash_copy_action">Копировать</string>
+    <string name="crash_continue_action">Продолжить</string>
+    <string name="crash_copied_toast">Текст ошибки скопирован в буфер обмена</string>
 </resources>

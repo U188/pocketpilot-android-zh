@@ -16,19 +16,21 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -133,7 +135,7 @@ fun ServerEditorScreen(
     }
 
     Scaffold(
-        contentWindowInsets = WindowInsets.safeDrawing,
+        contentWindowInsets = WindowInsets.systemBars,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -175,6 +177,7 @@ fun ServerEditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
                 .imePadding(),
             contentAlignment = Alignment.TopCenter,
         ) {
@@ -219,6 +222,7 @@ fun ServerEditorScreen(
                         label = { Text(stringResource(R.string.editor_name_label)) },
                         placeholder = { Text(stringResource(R.string.editor_name_placeholder)) },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("editor_name_input"),
@@ -230,6 +234,7 @@ fun ServerEditorScreen(
                         label = { Text(stringResource(R.string.editor_host_label)) },
                         placeholder = { Text(stringResource(R.string.editor_host_placeholder)) },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = MonoFontFamily),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -245,7 +250,10 @@ fun ServerEditorScreen(
                             onValueChange = viewModel::onSshPortChange,
                             label = { Text(stringResource(R.string.editor_ssh_port_label)) },
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Next,
+                            ),
                             textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = MonoFontFamily),
                             modifier = Modifier
                                 .weight(1f)
@@ -257,7 +265,10 @@ fun ServerEditorScreen(
                             onValueChange = viewModel::onOpenCodePortChange,
                             label = { Text(stringResource(R.string.editor_opencode_port_label)) },
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Next,
+                            ),
                             textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = MonoFontFamily),
                             modifier = Modifier
                                 .weight(1f)
@@ -277,6 +288,7 @@ fun ServerEditorScreen(
                         label = { Text(stringResource(R.string.editor_username_label)) },
                         placeholder = { Text(stringResource(R.string.editor_username_placeholder)) },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = MonoFontFamily),
                         modifier = Modifier
                             .fillMaxWidth()
