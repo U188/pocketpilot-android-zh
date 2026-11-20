@@ -8,6 +8,7 @@ import com.example.data.opencode.OpenCodeApiClient
 import com.example.data.opencode.OpenCodeConfigHelper
 import com.example.data.opencode.OpenCodeServerInstaller
 import com.example.data.opencode.ProviderApplyOutcome
+import com.example.data.repository.UsageRepository
 import com.example.data.sftp.SftpRepository
 import com.example.data.ssh.SshConnectionManager
 import com.example.domain.model.AttachedFileRef
@@ -15,6 +16,7 @@ import com.example.domain.model.ConfiguredProviderInfo
 import com.example.domain.model.CustomModelEntry
 import com.example.domain.model.CustomProviderSaveRequest
 import com.example.domain.model.InstallStepStatus
+import com.example.domain.model.ModelPricing
 import com.example.domain.model.ModelTestResult
 import com.example.domain.model.OpenCodeAgent
 import com.example.domain.model.OpenCodeEvent
@@ -31,9 +33,13 @@ import com.example.domain.model.PermissionReplyOption
 import com.example.domain.model.ProviderSaveStepItem
 import com.example.domain.model.ProviderSaveWarning
 import com.example.domain.model.RemoteFileEntry
+import com.example.domain.model.SessionContextUsage
+import com.example.domain.model.SessionUsageTotals
 import com.example.domain.model.SetupWizardStage
 import com.example.domain.model.SseConnectionStatus
 import com.example.domain.model.SshConnectionState
+import com.example.domain.model.UsageCalculator
+import com.example.service.AgentNotificationHelper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -89,6 +95,8 @@ data class ChatUiState(
     val isWorkspacePickerLoading: Boolean = false,
     val workspacePickerError: String? = null,
     val isCreatingWorkspaceFolder: Boolean = false,
+    // Token & cost pricing rules from Room
+    val modelPricingByKey: Map<String, ModelPricing> = emptyMap(),
 ) {
     val activeSession: OpenCodeSession?
         get() = sessions.firstOrNull { it.id == activeSessionId }
@@ -106,6 +114,17 @@ data class ChatUiState(
             .firstOrNull { it.providerId == selectedProviderId && it.modelId == selectedModelId }
             ?.displayName
             ?: selectedModelId.takeIf { it.isNotBlank() }
+
+    val sessionUsageTotals: SessionUsageTotals
+        get() = UsageCalculator.computeSessionTotals(messages, modelPricingByKey)
+
+    val sessionContextUsage: SessionContextUsage?
+        get() = UsageCalculator.computeContextUsage(
+            messages = messages,
+            providers = providers,
+            selectedProviderId = selectedProviderId,
+            selectedModelId = selectedModelId,
+        )
 }
 
 class ChatViewModel(
@@ -114,6 +133,8 @@ class ChatViewModel(
     private val sftpRepository: SftpRepository,
     private val preferencesRepository: AppPreferencesRepository,
     private val serverInstaller: OpenCodeServerInstaller,
+    private val usageRepository: UsageRepository,
+    private val agentNotificationHelper: AgentNotificationHelper,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -139,6 +160,12 @@ class ChatViewModel(
     private var lastSentAttachments: List<AttachedFileRef> = emptyList()
 
     init {
+        viewModelScope.launch {
+            usageRepository.allPricingMap.collect { pricingMap ->
+                _uiState.update { it.copy(modelPricingByKey = pricingMap) }
+            }
+        }
+
         viewModelScope.launch {
             preferencesRepository.settings.collect { settings ->
                 activeWorkspaceByProfile = settings.activeWorkspaceByProfile
@@ -452,6 +479,13 @@ class ChatViewModel(
             runCatching {
                 apiClient.getMessages(sessionId)
             }.onSuccess { msgs ->
+                val profileId = currentActiveProfileId()
+                val workspace = _uiState.value.activeWorkspacePath
+                if (profileId != null && msgs.isNotEmpty()) {
+                    viewModelScope.launch {
+                        runCatching { usageRepository.recordMessages(profileId, workspace, msgs) }
+                    }
+                }
                 if (_uiState.value.activeSessionId == sessionId) {
                     _uiState.update {
                         it.copy(
@@ -741,6 +775,7 @@ class ChatViewModel(
             runCatching {
                 apiClient.replyPermission(request, option)
             }.onSuccess {
+                agentNotificationHelper.cancelPermissionNotification(request.id)
                 _uiState.update { state ->
                     state.copy(
                         isSubmittingPermission = false,
@@ -978,7 +1013,16 @@ class ChatViewModel(
             }
 
             is OpenCodeEvent.SessionStatusChanged -> {
+                val previousSession = _uiState.value.sessions.firstOrNull { it.id == event.sessionId }
+                val wasBusy = previousSession?.isBusy == true ||
+                    (event.sessionId == _uiState.value.activeSessionId && _uiState.value.isSending)
                 markSessionBusy(event.sessionId, event.isBusy)
+                if (wasBusy && !event.isBusy) {
+                    agentNotificationHelper.notifyAgentFinished(
+                        sessionId = event.sessionId,
+                        sessionTitle = previousSession?.title,
+                    )
+                }
                 if (event.sessionId == _uiState.value.activeSessionId) {
                     lastSessionEventAtMs = System.currentTimeMillis()
                     if (event.isBusy) {
@@ -1049,6 +1093,15 @@ class ChatViewModel(
             }
 
             is OpenCodeEvent.MessageUpdated -> {
+                if (!event.message.isUser && event.message.tokens?.hasAny == true) {
+                    val profileId = currentActiveProfileId()
+                    val workspace = _uiState.value.activeWorkspacePath
+                    if (profileId != null) {
+                        viewModelScope.launch {
+                            runCatching { usageRepository.recordMessage(profileId, workspace, event.message) }
+                        }
+                    }
+                }
                 if (event.message.sessionId != _uiState.value.activeSessionId) return
                 if (!event.message.error.isNullOrBlank()) {
                     lastSessionError = event.message.error
@@ -1060,6 +1113,8 @@ class ChatViewModel(
                             parts = existing.parts,
                             completedAtMillis = event.message.completedAtMillis ?: existing.completedAtMillis,
                             error = event.message.error ?: existing.error,
+                            tokens = event.message.tokens ?: existing.tokens,
+                            costUsd = event.message.costUsd ?: existing.costUsd,
                         )
                     } else {
                         event.message
@@ -1122,6 +1177,7 @@ class ChatViewModel(
             }
 
             is OpenCodeEvent.PermissionAsked -> {
+                agentNotificationHelper.notifyPermissionNeeded(event.request)
                 _uiState.update { state ->
                     val withoutDup = state.pendingPermissions.filterNot { it.id == event.request.id }
                     state.copy(pendingPermissions = withoutDup + event.request, isResponseStalled = false)
@@ -1132,6 +1188,7 @@ class ChatViewModel(
             }
 
             is OpenCodeEvent.PermissionReplied -> {
+                agentNotificationHelper.cancelPermissionNotification(event.requestId)
                 _uiState.update { state ->
                     state.copy(
                         pendingPermissions = state.pendingPermissions.filterNot { it.id == event.requestId },
@@ -1693,33 +1750,49 @@ class ChatViewModel(
     }
 
     fun startEditProvider(provider: ConfiguredProviderInfo) {
-        val existingEntries = provider.models.map { m ->
-            CustomModelEntry(id = m.id, displayName = m.name, selected = true)
-        }
-        val initialDefault = provider.defaultModelId
-            ?.takeIf { defId -> existingEntries.any { it.id == defId } }
-            ?: existingEntries.firstOrNull()?.id.orEmpty()
+        viewModelScope.launch {
+            val savedPricing = runCatching {
+                usageRepository.getPricingForProvider(provider.providerId)
+            }.getOrDefault(emptyMap())
 
-        _uiState.update { state ->
-            state.copy(
-                setup = state.setup.copy(
-                    useCustomProvider = true,
-                    editingProviderId = provider.providerId,
-                    editingMaskedApiKey = provider.maskedApiKey,
-                    providerName = provider.name,
-                    baseUrl = provider.baseUrl.ifBlank { "https://api.openai.com/v1" },
-                    // Never store or prefill raw API keys in the app
-                    apiKeyInput = "",
-                    availableModels = existingEntries,
-                    modelSearchQuery = "",
-                    manualModelIdInput = "",
-                    defaultSelectedModelId = initialDefault,
-                    fetchModelsError = null,
-                    fetchModelsCount = null,
-                    modelTestResult = null,
-                    errorMessage = null,
-                ),
-            )
+            val existingEntries = provider.models.map { m ->
+                val p = savedPricing[m.id]
+                CustomModelEntry(
+                    id = m.id,
+                    displayName = m.name,
+                    selected = true,
+                    multiplierText = formatDecimalInput(p?.multiplier ?: 1.0),
+                    cacheMultiplierText = formatDecimalInput(p?.cacheMultiplier ?: 1.0),
+                    inputPricePer1MText = (p?.inputPricePer1M ?: m.inputPricePer1M)?.let(::formatDecimalInput).orEmpty(),
+                    outputPricePer1MText = (p?.outputPricePer1M ?: m.outputPricePer1M)?.let(::formatDecimalInput).orEmpty(),
+                    contextLimit = m.contextLimit,
+                )
+            }
+            val initialDefault = provider.defaultModelId
+                ?.takeIf { defId -> existingEntries.any { it.id == defId } }
+                ?: existingEntries.firstOrNull()?.id.orEmpty()
+
+            _uiState.update { state ->
+                state.copy(
+                    setup = state.setup.copy(
+                        useCustomProvider = true,
+                        editingProviderId = provider.providerId,
+                        editingMaskedApiKey = provider.maskedApiKey,
+                        providerName = provider.name,
+                        baseUrl = provider.baseUrl.ifBlank { "https://api.openai.com/v1" },
+                        // Never store or prefill raw API keys in the app
+                        apiKeyInput = "",
+                        availableModels = existingEntries,
+                        modelSearchQuery = "",
+                        manualModelIdInput = "",
+                        defaultSelectedModelId = initialDefault,
+                        fetchModelsError = null,
+                        fetchModelsCount = null,
+                        modelTestResult = null,
+                        errorMessage = null,
+                    ),
+                )
+            }
         }
     }
 
@@ -1823,6 +1896,46 @@ class ChatViewModel(
         }
     }
 
+    fun updateModelMultiplier(modelId: String, multiplierText: String) {
+        val filtered = filterDecimalInput(multiplierText)
+        _uiState.update { state ->
+            val updated = state.setup.availableModels.map { entry ->
+                if (entry.id == modelId) entry.copy(multiplierText = filtered) else entry
+            }
+            state.copy(setup = state.setup.copy(availableModels = updated))
+        }
+    }
+
+    fun updateModelCacheMultiplier(modelId: String, cacheMultiplierText: String) {
+        val filtered = filterDecimalInput(cacheMultiplierText)
+        _uiState.update { state ->
+            val updated = state.setup.availableModels.map { entry ->
+                if (entry.id == modelId) entry.copy(cacheMultiplierText = filtered) else entry
+            }
+            state.copy(setup = state.setup.copy(availableModels = updated))
+        }
+    }
+
+    fun updateModelInputPrice(modelId: String, priceText: String) {
+        val filtered = filterDecimalInput(priceText)
+        _uiState.update { state ->
+            val updated = state.setup.availableModels.map { entry ->
+                if (entry.id == modelId) entry.copy(inputPricePer1MText = filtered) else entry
+            }
+            state.copy(setup = state.setup.copy(availableModels = updated))
+        }
+    }
+
+    fun updateModelOutputPrice(modelId: String, priceText: String) {
+        val filtered = filterDecimalInput(priceText)
+        _uiState.update { state ->
+            val updated = state.setup.availableModels.map { entry ->
+                if (entry.id == modelId) entry.copy(outputPricePer1MText = filtered) else entry
+            }
+            state.copy(setup = state.setup.copy(availableModels = updated))
+        }
+    }
+
     fun selectDefaultModelInEditor(modelId: String) {
         _uiState.update { state ->
             val updated = state.setup.availableModels.map { entry ->
@@ -1862,25 +1975,39 @@ class ChatViewModel(
                     openCodePort = connected.profile.openCodePort,
                 )
             }.onSuccess { fetched ->
+                val targetProviderId = s.editingProviderId ?: OpenCodeConfigHelper.sanitizeProviderId(s.providerName)
+                val savedPricing = runCatching {
+                    usageRepository.getPricingForProvider(targetProviderId)
+                }.getOrDefault(emptyMap())
+
                 _uiState.update { state ->
-                    val previouslySelectedById = state.setup.availableModels
-                        .filter { it.selected }
+                    val previouslyEditedById = state.setup.availableModels
                         .associateBy { it.id }
 
                     val mergedMap = LinkedHashMap<String, CustomModelEntry>()
-                    // Preserve already-selected models (with any customized display names)
-                    previouslySelectedById.values.forEach { entry ->
+                    // Preserve already-selected models (with customized display names & pricing/multipliers)
+                    previouslyEditedById.values.filter { it.selected }.forEach { entry ->
                         mergedMap[entry.id] = entry
                     }
-                    // Add fetched models (name initialized from ID)
+                    // Add fetched models (name initialized from ID; apply any stored pricing/multipliers)
                     fetched.forEach { remote ->
                         if (!mergedMap.containsKey(remote.id)) {
-                            mergedMap[remote.id] = remote
+                            val prev = previouslyEditedById[remote.id]
+                            val p = savedPricing[remote.id]
+                            mergedMap[remote.id] = when {
+                                prev != null -> prev
+                                p != null -> remote.copy(
+                                    multiplierText = formatDecimalInput(p.multiplier),
+                                    cacheMultiplierText = formatDecimalInput(p.cacheMultiplier),
+                                    inputPricePer1MText = p.inputPricePer1M?.let(::formatDecimalInput).orEmpty(),
+                                    outputPricePer1MText = p.outputPricePer1M?.let(::formatDecimalInput).orEmpty(),
+                                )
+                                else -> remote
+                            }
                         }
                     }
 
                     val mergedList = mergedMap.values.toList().let { list ->
-                        // If nothing is selected yet and only 1 model exists, pre-select it for convenience
                         if (list.none { it.selected } && list.size == 1) {
                             listOf(list.first().copy(selected = true))
                         } else {
@@ -2047,6 +2174,7 @@ class ChatViewModel(
                     is ProviderApplyOutcome.Success -> {
                         val savedProviderId = outcome.providerId ?: providerId
                         val savedDefaultModelId = outcome.defaultModelId ?: defaultModelId
+                        persistModelPricingForProvider(savedProviderId, chosenModels)
                         completeProviderSaveAndOpenChat(
                             providerId = savedProviderId,
                             defaultModelId = savedDefaultModelId,
@@ -2056,6 +2184,8 @@ class ChatViewModel(
                     }
 
                     is ProviderApplyOutcome.SavedWithCheckWarning -> {
+                        val savedProviderId = outcome.providerId ?: providerId
+                        persistModelPricingForProvider(savedProviderId, chosenModels)
                         // Config was written & service is active — keep opencode.json, show warning with Retry/Continue
                         _uiState.update { state ->
                             state.copy(
@@ -2065,7 +2195,7 @@ class ChatViewModel(
                                     errorMessage = null,
                                     providerSaveWarning = ProviderSaveWarning(
                                         message = outcome.warningMessage,
-                                        providerId = outcome.providerId ?: providerId,
+                                        providerId = savedProviderId,
                                         defaultModelId = outcome.defaultModelId ?: defaultModelId,
                                     ),
                                 ),
@@ -2383,6 +2513,7 @@ class ChatViewModel(
             }.onSuccess { outcome ->
                 when (outcome) {
                     is ProviderApplyOutcome.Success -> {
+                        runCatching { usageRepository.deletePricingForProvider(provider.providerId) }
                         apiClient.invalidateDiscoveryCache()
                         val wasSelected = _uiState.value.selectedProviderId == provider.providerId
                         val wasEditing = _uiState.value.setup.editingProviderId == provider.providerId
@@ -2409,6 +2540,7 @@ class ChatViewModel(
                     }
 
                     is ProviderApplyOutcome.SavedWithCheckWarning -> {
+                        runCatching { usageRepository.deletePricingForProvider(provider.providerId) }
                         val wasSelected = _uiState.value.selectedProviderId == provider.providerId
                         _uiState.update { state ->
                             state.copy(
@@ -2502,6 +2634,52 @@ class ChatViewModel(
         }
     }
 
+    private suspend fun persistModelPricingForProvider(
+        providerId: String,
+        models: List<CustomModelEntry>,
+    ) {
+        val pricingList = models.map { entry ->
+            ModelPricing(
+                providerId = providerId,
+                modelId = entry.id.trim(),
+                multiplier = entry.parsedMultiplier,
+                cacheMultiplier = entry.parsedCacheMultiplier,
+                inputPricePer1M = entry.parsedInputPricePer1M,
+                outputPricePer1M = entry.parsedOutputPricePer1M,
+            )
+        }
+        runCatching { usageRepository.saveProviderModelPricing(providerId, pricingList) }
+    }
+
+    private fun currentActiveProfileId(): Long? {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected
+        return connected?.profile?.id ?: lastProfileId
+    }
+
+    private fun filterDecimalInput(raw: String): String {
+        val normalized = raw.replace(',', '.')
+        val sb = StringBuilder()
+        var hasDot = false
+        for (ch in normalized) {
+            when {
+                ch.isDigit() -> sb.append(ch)
+                ch == '.' && !hasDot -> {
+                    hasDot = true
+                    sb.append(ch)
+                }
+            }
+        }
+        return sb.toString().take(12)
+    }
+
+    private fun formatDecimalInput(value: Double): String {
+        return if (value == value.toLong().toDouble()) {
+            value.toLong().toString()
+        } else {
+            value.toBigDecimal().stripTrailingZeros().toPlainString()
+        }
+    }
+
     override fun onCleared() {
         stopSseStream()
         cancelInactivityWatchdog()
@@ -2520,6 +2698,8 @@ class ChatViewModel(
         private val sftpRepository: SftpRepository,
         private val preferencesRepository: AppPreferencesRepository,
         private val serverInstaller: OpenCodeServerInstaller,
+        private val usageRepository: UsageRepository,
+        private val agentNotificationHelper: AgentNotificationHelper,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -2529,6 +2709,8 @@ class ChatViewModel(
                 sftpRepository = sftpRepository,
                 preferencesRepository = preferencesRepository,
                 serverInstaller = serverInstaller,
+                usageRepository = usageRepository,
+                agentNotificationHelper = agentNotificationHelper,
             ) as T
         }
     }

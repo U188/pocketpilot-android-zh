@@ -10,9 +10,32 @@ import com.example.domain.model.OpenCodePart
 import com.example.domain.model.OpenCodePermissionRequest
 import com.example.domain.model.OpenCodeProvider
 import com.example.domain.model.OpenCodeSession
+import com.example.domain.model.TokenUsage
 import com.example.domain.model.ToolCallStatus
 import org.json.JSONArray
 import org.json.JSONObject
+
+/**
+ * Schema field names verified against OpenCode's live `/doc` OpenAPI document
+ * (`components.schemas.AssistantMessage`, `Message`, `Model`), falling back to
+ * OpenCode's documented standard field names when `/doc` is unavailable.
+ */
+data class OpenCodeUsageSchemaFields(
+    val tokensField: String = "tokens",
+    val costField: String = "cost",
+    val inputField: String = "input",
+    val outputField: String = "output",
+    val reasoningField: String = "reasoning",
+    val cacheField: String = "cache",
+    val cacheReadField: String = "read",
+    val cacheWriteField: String = "write",
+    val modelLimitField: String = "limit",
+    val modelContextLimitField: String = "context",
+    val modelOutputLimitField: String = "output",
+    val modelCostField: String = "cost",
+    val modelCostInputField: String = "input",
+    val modelCostOutputField: String = "output",
+)
 
 data class DiscoveredOpenCodePaths(
     val messagesListSuffix: String = "message",
@@ -27,6 +50,7 @@ data class DiscoveredOpenCodePaths(
     val permissionListSupported: Boolean = true,
     val directoryQueryParamName: String? = "directory",
     val directoryHeaderName: String? = "x-opencode-directory",
+    val usageSchema: OpenCodeUsageSchemaFields = OpenCodeUsageSchemaFields(),
 )
 
 object OpenCodeJsonParser {
@@ -66,6 +90,7 @@ object OpenCodeJsonParser {
         val permissionListSupported = "/permission" in keys
 
         val (dirQueryParam, dirHeader) = detectDirectoryParameters(root, paths)
+        val usageSchema = detectUsageSchemaFields(root)
 
         return DiscoveredOpenCodePaths(
             messagesListSuffix = messagesSuffix,
@@ -80,6 +105,97 @@ object OpenCodeJsonParser {
             permissionListSupported = permissionListSupported,
             directoryQueryParamName = dirQueryParam,
             directoryHeaderName = dirHeader,
+            usageSchema = usageSchema,
+        )
+    }
+
+    private fun detectUsageSchemaFields(root: JSONObject): OpenCodeUsageSchemaFields {
+        val schemas = root.optJSONObject("components")?.optJSONObject("schemas")
+            ?: return OpenCodeUsageSchemaFields()
+
+        fun resolveSchema(raw: JSONObject?): JSONObject? {
+            if (raw == null) return null
+            val ref = raw.optString("\$ref").takeIf { it.isNotBlank() }
+            if (ref != null) {
+                return schemas.optJSONObject(ref.substringAfterLast('/'))
+            }
+            return raw
+        }
+
+        fun collectProperties(schemaObj: JSONObject?): Map<String, JSONObject> {
+            val resolved = resolveSchema(schemaObj) ?: return emptyMap()
+            val out = LinkedHashMap<String, JSONObject>()
+            resolved.optJSONObject("properties")?.let { props ->
+                val it = props.keys()
+                while (it.hasNext()) {
+                    val k = it.next()
+                    props.optJSONObject(k)?.let { v -> out[k] = v }
+                }
+            }
+            for (comboKey in listOf("allOf", "anyOf", "oneOf")) {
+                val arr = resolved.optJSONArray(comboKey) ?: continue
+                for (i in 0 until arr.length()) {
+                    out.putAll(collectProperties(arr.optJSONObject(i)))
+                }
+            }
+            return out
+        }
+
+        fun pickKey(props: Map<String, JSONObject>, vararg candidates: String): String? {
+            for (cand in candidates) {
+                val exact = props.keys.firstOrNull { it == cand }
+                if (exact != null) return exact
+            }
+            for (cand in candidates) {
+                val ci = props.keys.firstOrNull { it.equals(cand, ignoreCase = true) }
+                if (ci != null) return ci
+            }
+            return null
+        }
+
+        val assistantSchema = schemas.optJSONObject("AssistantMessage")
+            ?: schemas.optJSONObject("Message")
+        val msgProps = collectProperties(assistantSchema)
+        val tokensField = pickKey(msgProps, "tokens", "usage") ?: "tokens"
+        val costField = pickKey(msgProps, "cost", "costUsd", "totalCost") ?: "cost"
+
+        val tokensProps = collectProperties(msgProps[tokensField])
+        val inputField = pickKey(tokensProps, "input", "inputTokens", "prompt_tokens") ?: "input"
+        val outputField = pickKey(tokensProps, "output", "outputTokens", "completion_tokens") ?: "output"
+        val reasoningField = pickKey(tokensProps, "reasoning", "reasoningTokens") ?: "reasoning"
+        val cacheField = pickKey(tokensProps, "cache", "cached") ?: "cache"
+        val cacheProps = collectProperties(tokensProps[cacheField])
+        val cacheReadField = pickKey(cacheProps, "read", "cacheRead", "cached") ?: "read"
+        val cacheWriteField = pickKey(cacheProps, "write", "cacheWrite", "creation") ?: "write"
+
+        val modelSchema = schemas.optJSONObject("Model")
+            ?: schemas.optJSONObject("ProviderModel")
+        val modelProps = collectProperties(modelSchema)
+        val modelLimitField = pickKey(modelProps, "limit", "limits") ?: "limit"
+        val limitProps = collectProperties(modelProps[modelLimitField])
+        val modelContextLimitField = pickKey(limitProps, "context", "contextWindow", "context_length") ?: "context"
+        val modelOutputLimitField = pickKey(limitProps, "output", "maxOutput", "max_tokens") ?: "output"
+
+        val modelCostField = pickKey(modelProps, "cost", "pricing") ?: "cost"
+        val modelCostProps = collectProperties(modelProps[modelCostField])
+        val modelCostInputField = pickKey(modelCostProps, "input", "prompt") ?: "input"
+        val modelCostOutputField = pickKey(modelCostProps, "output", "completion") ?: "output"
+
+        return OpenCodeUsageSchemaFields(
+            tokensField = tokensField,
+            costField = costField,
+            inputField = inputField,
+            outputField = outputField,
+            reasoningField = reasoningField,
+            cacheField = cacheField,
+            cacheReadField = cacheReadField,
+            cacheWriteField = cacheWriteField,
+            modelLimitField = modelLimitField,
+            modelContextLimitField = modelContextLimitField,
+            modelOutputLimitField = modelOutputLimitField,
+            modelCostField = modelCostField,
+            modelCostInputField = modelCostInputField,
+            modelCostOutputField = modelCostOutputField,
         )
     }
 
@@ -173,7 +289,11 @@ object OpenCodeJsonParser {
         )
     }
 
-    fun parseMessages(rawJson: String, fallbackSessionId: String): List<OpenCodeMessage> {
+    fun parseMessages(
+        rawJson: String,
+        fallbackSessionId: String,
+        schema: OpenCodeUsageSchemaFields = OpenCodeUsageSchemaFields(),
+    ): List<OpenCodeMessage> {
         val trimmed = rawJson.trim()
         if (trimmed.isEmpty()) return emptyList()
         val array = when {
@@ -187,14 +307,18 @@ object OpenCodeJsonParser {
         val list = mutableListOf<OpenCodeMessage>()
         for (i in 0 until array.length()) {
             val item = array.optJSONObject(i) ?: continue
-            parseMessageWrapper(item, fallbackSessionId)?.let(list::add)
+            parseMessageWrapper(item, fallbackSessionId, schema)?.let(list::add)
         }
         return list.sortedBy { it.createdAtMillis }
     }
 
-    fun parseMessageWrapper(obj: JSONObject, fallbackSessionId: String): OpenCodeMessage? {
+    fun parseMessageWrapper(
+        obj: JSONObject,
+        fallbackSessionId: String,
+        schema: OpenCodeUsageSchemaFields = OpenCodeUsageSchemaFields(),
+    ): OpenCodeMessage? {
         val infoObj = obj.optJSONObject("info") ?: obj
-        val base = parseMessageInfo(infoObj, fallbackSessionId) ?: return null
+        val base = parseMessageInfo(infoObj, fallbackSessionId, schema) ?: return null
         val partsArray = obj.optJSONArray("parts")
         val parts = if (partsArray != null) {
             buildList {
@@ -209,7 +333,11 @@ object OpenCodeJsonParser {
         return base.copy(parts = parts)
     }
 
-    fun parseMessageInfo(info: JSONObject, fallbackSessionId: String = ""): OpenCodeMessage? {
+    fun parseMessageInfo(
+        info: JSONObject,
+        fallbackSessionId: String = "",
+        schema: OpenCodeUsageSchemaFields = OpenCodeUsageSchemaFields(),
+    ): OpenCodeMessage? {
         val id = info.optString("id").takeIf { it.isNotBlank() } ?: return null
         val sessionId = info.optString("sessionID").takeIf { it.isNotBlank() } ?: fallbackSessionId
         val role = info.optString("role").ifBlank { "assistant" }
@@ -228,6 +356,8 @@ object OpenCodeJsonParser {
         val agent = info.optString("agent").takeIf { it.isNotBlank() }
             ?: info.optString("mode").takeIf { it.isNotBlank() }
         val errorMsg = extractErrorMessage(info)
+        val tokens = parseTokens(info, schema)
+        val costUsd = extractDoubleOrNull(info, schema.costField, "cost")
 
         return OpenCodeMessage(
             id = id,
@@ -239,7 +369,60 @@ object OpenCodeJsonParser {
             modelId = modelId,
             agent = agent,
             error = errorMsg,
+            tokens = tokens,
+            costUsd = costUsd,
         )
+    }
+
+    private fun parseTokens(
+        info: JSONObject,
+        schema: OpenCodeUsageSchemaFields,
+    ): TokenUsage? {
+        val tokensObj = info.optJSONObject(schema.tokensField)
+            ?: info.optJSONObject("tokens")
+            ?: info.optJSONObject("usage")
+            ?: return null
+        val input = extractLong(tokensObj, schema.inputField, "input", "inputTokens", "prompt_tokens")
+        val output = extractLong(tokensObj, schema.outputField, "output", "outputTokens", "completion_tokens")
+        val reasoning = extractLong(tokensObj, schema.reasoningField, "reasoning", "reasoningTokens")
+        val cacheObj = tokensObj.optJSONObject(schema.cacheField)
+            ?: tokensObj.optJSONObject("cache")
+        val cacheRead = if (cacheObj != null) {
+            extractLong(cacheObj, schema.cacheReadField, "read", "cacheRead")
+        } else {
+            extractLong(tokensObj, "cacheRead", "cache_read")
+        }
+        val cacheWrite = if (cacheObj != null) {
+            extractLong(cacheObj, schema.cacheWriteField, "write", "cacheWrite")
+        } else {
+            extractLong(tokensObj, "cacheWrite", "cache_write")
+        }
+        val usage = TokenUsage(
+            input = input.coerceAtLeast(0L),
+            output = output.coerceAtLeast(0L),
+            reasoning = reasoning.coerceAtLeast(0L),
+            cacheRead = cacheRead.coerceAtLeast(0L),
+            cacheWrite = cacheWrite.coerceAtLeast(0L),
+        )
+        return usage.takeIf { it.hasAny }
+    }
+
+    private fun extractLong(obj: JSONObject, vararg keys: String): Long {
+        for (k in keys) {
+            if (k.isBlank() || !obj.has(k) || obj.isNull(k)) continue
+            val value = obj.optDouble(k, Double.NaN)
+            if (!value.isNaN() && !value.isInfinite()) return value.toLong()
+        }
+        return 0L
+    }
+
+    private fun extractDoubleOrNull(obj: JSONObject, vararg keys: String): Double? {
+        for (k in keys) {
+            if (k.isBlank() || !obj.has(k) || obj.isNull(k)) continue
+            val value = obj.optDouble(k, Double.NaN)
+            if (!value.isNaN() && !value.isInfinite()) return value
+        }
+        return null
     }
 
     private fun extractErrorMessage(container: JSONObject): String? {
@@ -364,7 +547,10 @@ object OpenCodeJsonParser {
         }
     }
 
-    fun parseProviders(rawJson: String): List<OpenCodeProvider> {
+    fun parseProviders(
+        rawJson: String,
+        schema: OpenCodeUsageSchemaFields = OpenCodeUsageSchemaFields(),
+    ): List<OpenCodeProvider> {
         val trimmed = rawJson.trim()
         if (trimmed.isEmpty()) return emptyList()
         val providersArray = when {
@@ -405,28 +591,14 @@ object OpenCodeJsonParser {
                     val mObj = modelsObj.optJSONObject(key)
                     val mId = mObj?.optString("id")?.takeIf { it.isNotBlank() } ?: key
                     val mName = mObj?.optString("name")?.takeIf { it.isNotBlank() } ?: mId
-                    models.add(
-                        OpenCodeModel(
-                            providerId = providerId,
-                            providerName = providerName,
-                            modelId = mId,
-                            displayName = mName,
-                        ),
-                    )
+                    models.add(buildParsedModel(providerId, providerName, mId, mName, mObj, schema))
                 }
             } else if (modelsArr != null) {
                 for (mIdx in 0 until modelsArr.length()) {
                     val mObj = modelsArr.optJSONObject(mIdx) ?: continue
                     val mId = mObj.optString("id").takeIf { it.isNotBlank() } ?: continue
                     val mName = mObj.optString("name").ifBlank { mId }
-                    models.add(
-                        OpenCodeModel(
-                            providerId = providerId,
-                            providerName = providerName,
-                            modelId = mId,
-                            displayName = mName,
-                        ),
-                    )
+                    models.add(buildParsedModel(providerId, providerName, mId, mName, mObj, schema))
                 }
             }
 
@@ -441,6 +613,43 @@ object OpenCodeJsonParser {
             }
         }
         return result.sortedBy { it.name.lowercase() }
+    }
+
+    private fun buildParsedModel(
+        providerId: String,
+        providerName: String,
+        modelId: String,
+        displayName: String,
+        mObj: JSONObject?,
+        schema: OpenCodeUsageSchemaFields,
+    ): OpenCodeModel {
+        val limitObj = mObj?.optJSONObject(schema.modelLimitField)
+            ?: mObj?.optJSONObject("limit")
+        val contextLimit = limitObj
+            ?.let { extractLong(it, schema.modelContextLimitField, "context", "contextWindow") }
+            ?.takeIf { it > 0L }
+            ?: mObj?.let { extractLong(it, "context_length", "contextWindow") }?.takeIf { it > 0L }
+        val outputLimit = limitObj
+            ?.let { extractLong(it, schema.modelOutputLimitField, "output", "maxOutput") }
+            ?.takeIf { it > 0L }
+
+        val costObj = mObj?.optJSONObject(schema.modelCostField)
+            ?: mObj?.optJSONObject("cost")
+        val inputCost = costObj?.let { extractDoubleOrNull(it, schema.modelCostInputField, "input") }
+            ?.takeIf { it >= 0.0 }
+        val outputCost = costObj?.let { extractDoubleOrNull(it, schema.modelCostOutputField, "output") }
+            ?.takeIf { it >= 0.0 }
+
+        return OpenCodeModel(
+            providerId = providerId,
+            providerName = providerName,
+            modelId = modelId,
+            displayName = displayName,
+            contextLimit = contextLimit,
+            outputLimit = outputLimit,
+            inputCostPer1M = inputCost,
+            outputCostPer1M = outputCost,
+        )
     }
 
     fun parseAgents(rawJson: String): List<OpenCodeAgent> {
@@ -472,7 +681,10 @@ object OpenCodeJsonParser {
         return agents.ifEmpty { defaultAgents() }
     }
 
-    fun parseSseEvent(rawData: String): OpenCodeEvent? {
+    fun parseSseEvent(
+        rawData: String,
+        schema: OpenCodeUsageSchemaFields = OpenCodeUsageSchemaFields(),
+    ): OpenCodeEvent? {
         val root = runCatching { JSONObject(rawData) }.getOrNull() ?: return null
         val payload = root.optJSONObject("payload") ?: root
         val type = payload.optString("type").lowercase()
@@ -508,7 +720,7 @@ object OpenCodeJsonParser {
 
             "message.updated" -> {
                 val info = props.optJSONObject("info") ?: props
-                parseMessageInfo(info)?.let { OpenCodeEvent.MessageUpdated(it) }
+                parseMessageInfo(info, schema = schema)?.let { OpenCodeEvent.MessageUpdated(it) }
             }
 
             "message.part.updated" -> {

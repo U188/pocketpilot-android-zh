@@ -18,7 +18,7 @@ data class AppSettings(
     val defaultAgentName: String = "build",
     val keepAliveInBackground: Boolean = true,
     val biometricLockEnabled: Boolean = false,
-    val biometricLockTimeoutSec: Int = 60,
+    val biometricLockTimeoutSec: Int = 0,
     val secureScreenEnabled: Boolean = false,
     val lastChatSessionId: String? = null,
     val lastChatDraft: String = "",

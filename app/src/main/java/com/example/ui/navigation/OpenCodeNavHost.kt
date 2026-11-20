@@ -23,11 +23,14 @@ import com.example.ui.servers.ServersScreen
 import com.example.ui.servers.ServersViewModel
 import com.example.ui.settings.SettingsViewModel
 import com.example.ui.terminal.TerminalViewModel
+import com.example.ui.usage.UsageScreen
+import com.example.ui.usage.UsageViewModel
 import com.example.ui.workspace.WorkspaceScreen
 
 object OpenCodeRoutes {
     const val SERVERS = "servers"
     const val WORKSPACE = "workspace"
+    const val USAGE = "usage"
     const val SERVER_EDITOR = "server_editor/{profileId}"
     const val CODE_EDITOR = "code_editor?path={path}&line={line}"
 
@@ -56,6 +59,7 @@ fun OpenCodeNavHost(
             connectionManager = container.sshConnectionManager,
             serverInstaller = container.openCodeServerInstaller,
             appUpdateManager = container.appUpdateManager,
+            profileBackupManager = container.profileBackupManager,
         ),
     )
 
@@ -76,6 +80,8 @@ fun OpenCodeNavHost(
             sftpRepository = container.sftpRepository,
             preferencesRepository = container.preferencesRepository,
             serverInstaller = container.openCodeServerInstaller,
+            usageRepository = container.usageRepository,
+            agentNotificationHelper = container.agentNotificationHelper,
         ),
     )
 
@@ -95,6 +101,7 @@ fun OpenCodeNavHost(
                 factory = ServersViewModel.Factory(
                     profileRepository = container.serverProfileRepository,
                     connectionManager = container.sshConnectionManager,
+                    profileBackupManager = container.profileBackupManager,
                 ),
             )
             ServersScreen(
@@ -156,8 +163,27 @@ fun OpenCodeNavHost(
                 onOpenCodeEditor = { remotePath, line ->
                     navController.navigate(OpenCodeRoutes.codeEditor(remotePath, line))
                 },
+                onOpenUsage = {
+                    navController.navigate(OpenCodeRoutes.USAGE) {
+                        launchSingleTop = true
+                    }
+                },
                 onDisconnect = container.sshConnectionManager::disconnect,
                 onReconnect = container.sshConnectionManager::reconnectActive,
+            )
+        }
+
+        composable(route = OpenCodeRoutes.USAGE) {
+            val usageViewModel: UsageViewModel = viewModel(
+                factory = UsageViewModel.Factory(
+                    usageRepository = container.usageRepository,
+                    connectionManager = container.sshConnectionManager,
+                    preferencesRepository = container.preferencesRepository,
+                ),
+            )
+            UsageScreen(
+                viewModel = usageViewModel,
+                onNavigateBack = { navController.popBackStack() },
             )
         }
 

@@ -1,5 +1,8 @@
 package com.example.ui.servers
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -21,15 +24,19 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.LinkOff
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Password
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Terminal
@@ -38,6 +45,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
@@ -45,7 +54,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -59,11 +67,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,9 +85,14 @@ import com.example.domain.model.ServerProfile
 import com.example.domain.model.SshConnectionState
 import com.example.ui.components.ConnectionStatusBadge
 import com.example.ui.components.ConnectionStatusDot
+import com.example.ui.components.ExportBackupPasswordDialog
+import com.example.ui.components.ImportBackupPasswordDialog
 import com.example.ui.components.StatusChip
 import com.example.ui.theme.LocalStatusColors
 import com.example.ui.theme.MonoFontFamily
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -91,8 +106,50 @@ fun ServersScreen(
     onOpenWorkspace: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var profileToDelete by remember { mutableStateOf<ServerProfile?>(null) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
+    var pendingExportUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingImportContent by remember { mutableStateOf<String?>(null) }
+    var isBackupBusy by remember { mutableStateOf(false) }
+    var backupError by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val exportSuccessMsg = stringResource(R.string.backup_export_success)
+    val exportEmptyMsg = stringResource(R.string.backup_export_empty)
+
+    val exportDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        if (uri != null) {
+            pendingExportUri = uri
+            backupError = null
+            showExportDialog = true
+        }
+    }
+
+    val importDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val readResult = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        input.bufferedReader(Charsets.UTF_8).readText()
+                    } ?: error("Не удалось открыть выбранный файл")
+                }
+            }
+            readResult.onSuccess { content ->
+                backupError = null
+                pendingImportContent = content
+            }.onFailure { err ->
+                snackbarHostState.showSnackbar("Ошибка чтения файла: ${err.message.orEmpty()}")
+            }
+        }
+    }
 
     LaunchedEffect(uiState.connectionState) {
         val err = uiState.connectionState as? SshConnectionState.Error
@@ -131,6 +188,54 @@ fun ServersScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(text = stringResource(R.string.servers_open_workspace))
+                    }
+                    Box {
+                        IconButton(
+                            onClick = { showOverflowMenu = true },
+                            modifier = Modifier.testTag("servers_more_menu_button"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.MoreVert,
+                                contentDescription = stringResource(R.string.backup_menu_cd),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.backup_export_menu_item)) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.FileUpload,
+                                        contentDescription = null,
+                                    )
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    if (uiState.profiles.isEmpty()) {
+                                        scope.launch { snackbarHostState.showSnackbar(exportEmptyMsg) }
+                                    } else {
+                                        exportDocumentLauncher.launch("pocketpilot-servers.ppbackup")
+                                    }
+                                },
+                                modifier = Modifier.testTag("servers_export_profiles_menu_item"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.backup_import_menu_item)) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.FileDownload,
+                                        contentDescription = null,
+                                    )
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    importDocumentLauncher.launch(arrayOf("*/*"))
+                                },
+                                modifier = Modifier.testTag("servers_import_profiles_menu_item"),
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -233,6 +338,74 @@ fun ServersScreen(
                 ) {
                     Text(text = stringResource(R.string.action_cancel))
                 }
+            },
+        )
+    }
+
+    if (showExportDialog && pendingExportUri != null) {
+        val targetUri = pendingExportUri!!
+        ExportBackupPasswordDialog(
+            isBusy = isBackupBusy,
+            errorMessage = backupError,
+            onConfirm = { password ->
+                scope.launch {
+                    isBackupBusy = true
+                    backupError = null
+                    val encryptedResult = viewModel.exportEncryptedBackup(password)
+                    if (encryptedResult.isFailure) {
+                        isBackupBusy = false
+                        backupError = encryptedResult.exceptionOrNull()?.message ?: "Ошибка шифрования"
+                        return@launch
+                    }
+                    val writeResult = withContext(Dispatchers.IO) {
+                        runCatching {
+                            context.contentResolver.openOutputStream(targetUri)?.use { out ->
+                                out.write(encryptedResult.getOrThrow().toByteArray(Charsets.UTF_8))
+                                out.flush()
+                            } ?: error("Не удалось записать файл")
+                        }
+                    }
+                    isBackupBusy = false
+                    if (writeResult.isSuccess) {
+                        showExportDialog = false
+                        pendingExportUri = null
+                        snackbarHostState.showSnackbar(exportSuccessMsg)
+                    } else {
+                        backupError = writeResult.exceptionOrNull()?.message ?: "Ошибка сохранения файла"
+                    }
+                }
+            },
+            onDismiss = {
+                showExportDialog = false
+                pendingExportUri = null
+                backupError = null
+            },
+        )
+    }
+
+    pendingImportContent?.let { encryptedText ->
+        ImportBackupPasswordDialog(
+            isBusy = isBackupBusy,
+            errorMessage = backupError,
+            onConfirm = { password ->
+                scope.launch {
+                    isBackupBusy = true
+                    backupError = null
+                    val importResult = viewModel.importEncryptedBackup(encryptedText, password)
+                    isBackupBusy = false
+                    importResult.onSuccess { res ->
+                        pendingImportContent = null
+                        snackbarHostState.showSnackbar(
+                            "Импортировано профилей: ${res.importedCount}, обновлено: ${res.updatedCount}",
+                        )
+                    }.onFailure { err ->
+                        backupError = err.message ?: "Не удалось расшифровать файл"
+                    }
+                }
+            },
+            onDismiss = {
+                pendingImportContent = null
+                backupError = null
             },
         )
     }

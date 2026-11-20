@@ -200,7 +200,23 @@ object OpenCodeConfigHelper {
                     val mId = mKeys.next()
                     val mObj = modelsObj.optJSONObject(mId)
                     val mName = mObj?.optString("name")?.takeIf { it.isNotBlank() } ?: mId
-                    models.add(ConfiguredModelInfo(id = mId, name = mName))
+                    val costObj = mObj?.optJSONObject("cost")
+                    val inputCost = costObj?.optDouble("input", Double.NaN)
+                        ?.takeIf { !it.isNaN() && !it.isInfinite() && it >= 0.0 }
+                    val outputCost = costObj?.optDouble("output", Double.NaN)
+                        ?.takeIf { !it.isNaN() && !it.isInfinite() && it >= 0.0 }
+                    val contextLimit = mObj?.optJSONObject("limit")
+                        ?.optLong("context", 0L)
+                        ?.takeIf { it > 0L }
+                    models.add(
+                        ConfiguredModelInfo(
+                            id = mId,
+                            name = mName,
+                            inputPricePer1M = inputCost,
+                            outputPricePer1M = outputCost,
+                            contextLimit = contextLimit,
+                        ),
+                    )
                 }
             }
 
@@ -313,6 +329,14 @@ object OpenCodeConfigHelper {
         cleanModels.forEach { entry ->
             val modelObj = previousModelsObj?.optJSONObject(entry.id) ?: JSONObject()
             modelObj.put("name", entry.displayName)
+            val inPrice = entry.parsedInputPricePer1M
+            val outPrice = entry.parsedOutputPricePer1M
+            if (inPrice != null || outPrice != null) {
+                val costObj = modelObj.optJSONObject("cost") ?: JSONObject()
+                if (inPrice != null) costObj.put("input", inPrice)
+                if (outPrice != null) costObj.put("output", outPrice)
+                modelObj.put("cost", costObj)
+            }
             targetModelsObj.put(entry.id, modelObj)
         }
         providerObj.put("models", targetModelsObj)

@@ -586,4 +586,83 @@
     <string name="workspace_root_warning_desc">Вы собираетесь сделать корень файловой системы «/» рабочим пространством агента. Агент увидит системные каталоги сервера. Лучше выбрать конкретную папку проекта.</string>
     <string name="workspace_root_warning_confirm">Выбрать /</string>
     <string name="files_action_set_workspace">Сделать рабочим пространством</string>
+
+    <!-- Token, Context & Cost Tracking -->
+    <string name="chat_session_tokens_summary">%1$s ток. • %2$s</string>
+    <string name="chat_context_usage_label">Использовано %1$s из %2$s токенов (%3$d%%)</string>
+    <string name="chat_context_warning_80" formatted="false">&gt; 80% контекста</string>
+    <string name="usage_cost_not_set">стоимость не задана</string>
+
+    <!-- Model Multipliers & Custom Pricing -->
+    <string name="model_multiplier_label">Множитель</string>
+    <string name="model_cache_multiplier_label">Множитель кэша</string>
+    <string name="model_price_input_1m_label">Вход $/1M</string>
+    <string name="model_price_output_1m_label">Выход $/1M</string>
+    <string name="model_pricing_helper_hint">Единицы = (вход + выход) × множитель + кэш × множитель кэша. Цены $/1M также записываются в opencode.json.</string>
+
+    <!-- Encrypted Profile Backup -->
+    <string name="backup_menu_cd">Ещё действия</string>
+    <string name="backup_export_menu_item">Экспорт профилей (зашифровано)</string>
+    <string name="backup_import_menu_item">Импорт профилей из файла</string>
+    <string name="backup_export_dialog_title">Экспорт профилей серверов</string>
+    <string name="backup_export_dialog_desc">Задайте пароль для шифрования файла (AES-256-GCM + PBKDF2). Пароли и SSH-ключи никогда не сохраняются в открытом виде.</string>
+    <string name="backup_import_dialog_title">Импорт профилей серверов</string>
+    <string name="backup_import_dialog_desc">Введите пароль, указанный при создании зашифрованного файла резервной копии.</string>
+    <string name="backup_password_label">Пароль файла</string>
+    <string name="backup_password_confirm_label">Повторите пароль</string>
+    <string name="backup_show_password">Показать пароль</string>
+    <string name="backup_hide_password">Скрыть пароль</string>
+    <string name="backup_error_password_too_short">Пароль должен содержать минимум 4 символа</string>
+    <string name="backup_error_passwords_mismatch">Пароли не совпадают</string>
+    <string name="backup_export_button">Экспортировать</string>
+    <string name="backup_import_button">Импортировать</string>
+    <string name="backup_export_success">Зашифрованная резервная копия профилей сохранена</string>
+    <string name="backup_export_empty">Нет профилей серверов для экспорта</string>
+    <string name="settings_backup_section_title">Резервная копия профилей</string>
+    <string name="settings_backup_section_subtitle">Экспорт и импорт серверов с SSH-ключами и паролями в зашифрованный файл с паролем (AES-256-GCM).</string>
+
+    <!-- Usage Screen -->
+    <string name="usage_title">Использование</string>
+    <string name="settings_usage_entry_title">Токены и стоимость</string>
+    <string name="settings_usage_entry_subtitle">Статистика по дням, моделям и провайдерам, ручной баланс и экспорт CSV</string>
+    <string name="usage_sync_action">Синхронизировать с сервера</string>
+    <string name="usage_export_csv_action">Экспорт в CSV</string>
+    <string name="usage_csv_exported">Статистика сохранена в CSV</string>
+    <string name="usage_csv_export_failed">Не удалось сохранить CSV</string>
+    <string name="usage_scope_workspace">Текущая папка</string>
+    <string name="usage_scope_server">Весь сервер</string>
+    <string name="usage_period_today">Сегодня</string>
+    <string name="usage_period_7d">7 дней</string>
+    <string name="usage_period_30d">30 дней</string>
+    <string name="usage_period_all">Всё время</string>
+    <string name="usage_tab_by_day">По дням</string>
+    <string name="usage_tab_by_model">По моделям</string>
+    <string name="usage_tab_by_provider">По провайдерам</string>
+    <string name="usage_empty_title">Нет данных об использовании</string>
+    <string name="usage_empty_desc">Отправьте запрос в чате или нажмите «Синхронизировать с сервера», чтобы загрузить историю сессий OpenCode.</string>
+    <string name="usage_summary_title">Сводка за период</string>
+    <string name="usage_requests_count">%1$d запр.</string>
+    <string name="usage_metric_total_tokens">Всего токенов</string>
+    <string name="usage_metric_io_breakdown">вх %1$s / вых %2$s</string>
+    <string name="usage_metric_cost">Стоимость</string>
+    <string name="usage_metric_cache_breakdown">кэш %1$s</string>
+    <string name="usage_metric_provider_units">Единицы провайдера</string>
+    <string name="usage_estimated_by_app_caption">оценка по данным приложения</string>
+    <string name="usage_manual_balance_title">Остаток баланса (вручную)</string>
+    <string name="usage_manual_balance_hint">Введите текущий остаток в единицах провайдера, чтобы отслеживать примерный расход и оставшиеся запросы.</string>
+    <string name="usage_manual_balance_clear_cd">Сбросить баланс</string>
+    <string name="usage_manual_balance_entered_at">Введено: %1$s (%2$s)</string>
+    <string name="usage_manual_balance_spent">Потрачено с момента ввода: %1$s</string>
+    <string name="usage_manual_balance_remaining">Осталось примерно: %1$s</string>
+    <string name="usage_manual_balance_est_requests">~%1$d запросов осталось (среднее %2$s/запрос)</string>
+    <string name="usage_manual_balance_input_label">Остаток (в единицах)</string>
+
+    <!-- Background Agent Notifications -->
+    <string name="notif_agent_channel_name">События агента OpenCode</string>
+    <string name="notif_agent_channel_desc">Уведомления о завершении ответа агента и запросах разрешений в фоне</string>
+    <string name="notif_agent_finished_title">Агент закончил</string>
+    <string name="notif_agent_finished_body_session">Сессия «%1$s» готова — нажмите, чтобы открыть ответ.</string>
+    <string name="notif_agent_finished_body_default">Агент завершил задачу — нажмите, чтобы открыть чат.</string>
+    <string name="notif_agent_permission_title">Нужно разрешение агента</string>
+    <string name="notif_agent_permission_body">Запрос подтверждения: %1$s</string>
 </resources>

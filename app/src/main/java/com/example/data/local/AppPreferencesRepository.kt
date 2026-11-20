@@ -41,7 +41,7 @@ class AppPreferencesRepository(context: Context) {
             defaultAgentName = prefs[KEY_DEFAULT_AGENT_NAME]?.ifBlank { "build" } ?: "build",
             keepAliveInBackground = prefs[KEY_KEEP_ALIVE_BG] ?: true,
             biometricLockEnabled = prefs[KEY_BIOMETRIC_LOCK] ?: false,
-            biometricLockTimeoutSec = (prefs[KEY_BIOMETRIC_TIMEOUT_SEC] ?: 60).coerceIn(0, 600),
+            biometricLockTimeoutSec = (prefs[KEY_BIOMETRIC_TIMEOUT_SEC] ?: 0).coerceIn(0, 600),
             secureScreenEnabled = prefs[KEY_SECURE_SCREEN] ?: false,
             lastChatSessionId = prefs[KEY_LAST_CHAT_SESSION_ID],
             lastChatDraft = prefs[KEY_LAST_CHAT_DRAFT].orEmpty(),

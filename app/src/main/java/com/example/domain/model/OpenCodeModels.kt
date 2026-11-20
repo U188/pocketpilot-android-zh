@@ -78,6 +78,8 @@ data class OpenCodeMessage(
     val modelId: String? = null,
     val agent: String? = null,
     val error: String? = null,
+    val tokens: TokenUsage? = null,
+    val costUsd: Double? = null,
     val parts: List<OpenCodePart> = emptyList(),
 ) {
     val isUser: Boolean
@@ -89,6 +91,10 @@ data class OpenCodeModel(
     val providerName: String,
     val modelId: String,
     val displayName: String,
+    val contextLimit: Long? = null,
+    val outputLimit: Long? = null,
+    val inputCostPer1M: Double? = null,
+    val outputCostPer1M: Double? = null,
 )
 
 data class OpenCodeProvider(

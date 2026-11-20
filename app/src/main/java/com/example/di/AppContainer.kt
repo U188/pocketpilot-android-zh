@@ -8,13 +8,16 @@ import com.example.data.local.LocalSafBrowser
 import com.example.data.network.NetworkMonitor
 import com.example.data.opencode.OpenCodeApiClient
 import com.example.data.repository.KnownHostsRepository
+import com.example.data.repository.ProfileBackupManager
 import com.example.data.repository.ServerProfileRepository
 import com.example.data.repository.TerminalSnippetRepository
+import com.example.data.repository.UsageRepository
 import com.example.data.sftp.SftpRepository
 import com.example.data.sftp.TransferQueueManager
 import com.example.data.ssh.SshConnectionManager
 import com.example.data.ssh.SshKeyGenerator
 import com.example.data.update.AppUpdateManager
+import com.example.service.AgentNotificationHelper
 import com.example.service.SshForegroundServiceController
 
 class AppContainer(context: Context) {
@@ -90,6 +93,26 @@ class AppContainer(context: Context) {
         AppUpdateManager(
             context = appContext,
             preferencesRepository = preferencesRepository,
+        )
+    }
+
+    val agentNotificationHelper: AgentNotificationHelper by lazy {
+        AgentNotificationHelper(context = appContext)
+    }
+
+    val profileBackupManager: ProfileBackupManager by lazy {
+        ProfileBackupManager(
+            profileRepository = serverProfileRepository,
+            secretStore = secretStore,
+        )
+    }
+
+    val usageRepository: UsageRepository by lazy {
+        UsageRepository(
+            usageDao = database.usageDao(),
+            pricingDao = database.modelPricingDao(),
+            manualBalanceDao = database.manualBalanceDao(),
+            apiClient = openCodeApiClient,
         )
     }
 }

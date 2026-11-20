@@ -119,6 +119,7 @@ fun WorkspaceScreen(
     settingsViewModel: SettingsViewModel,
     onOpenServers: () -> Unit,
     onOpenCodeEditor: (remotePath: String, line: Int?) -> Unit,
+    onOpenUsage: () -> Unit = {},
     onDisconnect: () -> Unit,
     onReconnect: () -> Unit,
 ) {
@@ -339,6 +340,7 @@ fun WorkspaceScreen(
                                     chatViewModel.openRepairInstallPreview()
                                     selectedTab = WorkspaceTab.CHAT
                                 },
+                                onOpenUsage = onOpenUsage,
                             )
                         }
                     }

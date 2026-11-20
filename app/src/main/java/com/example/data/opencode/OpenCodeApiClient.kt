@@ -149,10 +149,17 @@ class OpenCodeApiClient(
         parsed
     }
 
-    suspend fun listSessions(): List<OpenCodeSession> = withContext(Dispatchers.IO) {
+    suspend fun listSessions(
+        includeDirectory: Boolean = true,
+        directoryOverride: String? = null,
+    ): List<OpenCodeSession> = withContext(Dispatchers.IO) {
         ensureApiDiscovered()
         val (_, baseUrl) = requireBaseUrl()
-        val body = executeGet("$baseUrl/session")
+        val body = executeGet(
+            url = "$baseUrl/session",
+            includeDirectory = includeDirectory,
+            directoryOverride = directoryOverride,
+        )
         OpenCodeJsonParser.parseSessions(body)
     }
 
@@ -192,15 +199,29 @@ class OpenCodeApiClient(
                 ?: throw IllegalStateException("Не удалось выполнить форк сессии")
         }
 
-    suspend fun getMessages(sessionId: String): List<OpenCodeMessage> = withContext(Dispatchers.IO) {
+    suspend fun getMessages(
+        sessionId: String,
+        includeDirectory: Boolean = true,
+        directoryOverride: String? = null,
+    ): List<OpenCodeMessage> = withContext(Dispatchers.IO) {
         val paths = ensureApiDiscovered()
         val (_, baseUrl) = requireBaseUrl()
         val primaryUrl = "$baseUrl/session/$sessionId/${paths.messagesListSuffix}"
-        val body = runCatching { executeGet(primaryUrl) }.getOrElse {
+        val body = runCatching {
+            executeGet(primaryUrl, includeDirectory = includeDirectory, directoryOverride = directoryOverride)
+        }.getOrElse {
             val fallbackSuffix = if (paths.messagesListSuffix == "message") "messages" else "message"
-            executeGet("$baseUrl/session/$sessionId/$fallbackSuffix")
+            executeGet(
+                url = "$baseUrl/session/$sessionId/$fallbackSuffix",
+                includeDirectory = includeDirectory,
+                directoryOverride = directoryOverride,
+            )
         }
-        OpenCodeJsonParser.parseMessages(body, fallbackSessionId = sessionId)
+        OpenCodeJsonParser.parseMessages(
+            rawJson = body,
+            fallbackSessionId = sessionId,
+            schema = paths.usageSchema,
+        )
     }
 
     suspend fun sendMessage(
@@ -287,7 +308,7 @@ class OpenCodeApiClient(
             val alt = if (paths.providersPath == "/config/providers") "/provider" else "/config/providers"
             executeGet("$baseUrl$alt")
         }
-        OpenCodeJsonParser.parseProviders(body)
+        OpenCodeJsonParser.parseProviders(body, schema = paths.usageSchema)
     }
 
     suspend fun getAgents(): List<OpenCodeAgent> = withContext(Dispatchers.IO) {
@@ -396,7 +417,10 @@ class OpenCodeApiClient(
 
                             line.isEmpty() -> {
                                 if (dataBuffer.isNotEmpty()) {
-                                    val event = OpenCodeJsonParser.parseSseEvent(dataBuffer.toString())
+                                    val event = OpenCodeJsonParser.parseSseEvent(
+                                        rawData = dataBuffer.toString(),
+                                        schema = discoveredPaths.usageSchema,
+                                    )
                                     dataBuffer.setLength(0)
                                     if (event != null) {
                                         emit(SseConnectionStatus.CONNECTED to event)
@@ -421,8 +445,16 @@ class OpenCodeApiClient(
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun executeGet(url: String, includeDirectory: Boolean = true): String {
-        val req = buildScopedRequestBuilder(url, includeDirectory = includeDirectory)
+    private fun executeGet(
+        url: String,
+        includeDirectory: Boolean = true,
+        directoryOverride: String? = null,
+    ): String {
+        val req = buildScopedRequestBuilder(
+            rawUrl = url,
+            includeDirectory = includeDirectory,
+            directoryOverride = directoryOverride,
+        )
             .header("Accept", "application/json")
             .get()
             .build()

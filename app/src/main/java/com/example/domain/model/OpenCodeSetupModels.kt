@@ -80,11 +80,31 @@ data class CustomModelEntry(
     val id: String,
     val displayName: String = id,
     val selected: Boolean = false,
-)
+    val multiplierText: String = "1",
+    val cacheMultiplierText: String = "1",
+    val inputPricePer1MText: String = "",
+    val outputPricePer1MText: String = "",
+    val contextLimit: Long? = null,
+) {
+    val parsedMultiplier: Double
+        get() = multiplierText.replace(',', '.').trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 1.0
+
+    val parsedCacheMultiplier: Double
+        get() = cacheMultiplierText.replace(',', '.').trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 1.0
+
+    val parsedInputPricePer1M: Double?
+        get() = inputPricePer1MText.replace(',', '.').trim().toDoubleOrNull()?.takeIf { it >= 0.0 }
+
+    val parsedOutputPricePer1M: Double?
+        get() = outputPricePer1MText.replace(',', '.').trim().toDoubleOrNull()?.takeIf { it >= 0.0 }
+}
 
 data class ConfiguredModelInfo(
     val id: String,
     val name: String,
+    val inputPricePer1M: Double? = null,
+    val outputPricePer1M: Double? = null,
+    val contextLimit: Long? = null,
 )
 
 /**

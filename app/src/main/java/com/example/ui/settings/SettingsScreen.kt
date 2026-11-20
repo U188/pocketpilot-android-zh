@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,6 +33,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Analytics
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Code
@@ -40,6 +42,8 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NewReleases
@@ -78,6 +82,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,14 +100,19 @@ import com.example.R
 import com.example.domain.model.SystemdServiceState
 import com.example.domain.model.TerminalSnippet
 import com.example.domain.model.ThemeMode
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import com.example.security.BiometricAuthHelper
+import com.example.ui.components.ExportBackupPasswordDialog
+import com.example.ui.components.ImportBackupPasswordDialog
 import com.example.ui.components.StatusChip
 import com.example.ui.terminal.SnippetEditorDialog
 import com.example.ui.theme.LocalStatusColors
 import com.example.ui.theme.MonoFontFamily
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -111,12 +121,14 @@ fun SettingsScreen(
     onManageServers: () -> Unit,
     onOpenConnectModel: () -> Unit = {},
     onRepairService: () -> Unit = {},
+    onOpenUsage: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = context as? FragmentActivity
     val biometricAvailable = remember(context) { BiometricAuthHelper.canAuthenticate(context) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(uiState.isSshConnected) {
         if (uiState.isSshConnected) {
@@ -141,6 +153,48 @@ fun SettingsScreen(
     var creatingSnippet by remember { mutableStateOf(false) }
     var editingSnippet by remember { mutableStateOf<TerminalSnippet?>(null) }
     var confirmRemoveService by remember { mutableStateOf(false) }
+
+    var showExportDialog by remember { mutableStateOf(false) }
+    var pendingExportUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingImportContent by remember { mutableStateOf<String?>(null) }
+    var isBackupBusy by remember { mutableStateOf(false) }
+    var backupDialogError by remember { mutableStateOf<String?>(null) }
+    var backupBannerMessage by remember { mutableStateOf<String?>(null) }
+    var backupBannerIsError by remember { mutableStateOf(false) }
+
+    val backupExportSuccessMsg = stringResource(R.string.backup_export_success)
+
+    val exportBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        if (uri != null) {
+            pendingExportUri = uri
+            backupDialogError = null
+            showExportDialog = true
+        }
+    }
+
+    val importBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val readResult = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        input.bufferedReader(Charsets.UTF_8).readText()
+                    } ?: error("Не удалось открыть выбранный файл")
+                }
+            }
+            readResult.onSuccess { content ->
+                backupDialogError = null
+                pendingImportContent = content
+            }.onFailure { err ->
+                backupBannerIsError = true
+                backupBannerMessage = "Ошибка чтения файла: ${err.message.orEmpty()}"
+            }
+        }
+    }
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -174,6 +228,42 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.titleSmall,
                             modifier = Modifier.weight(1f),
                         )
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            item(key = "usage_section") {
+                SettingsCard(title = stringResource(R.string.usage_title)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onOpenUsage)
+                            .padding(vertical = 6.dp)
+                            .testTag("settings_open_usage_button"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Analytics,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.settings_usage_entry_title),
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_usage_entry_subtitle),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                             contentDescription = null,
@@ -842,6 +932,79 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = stringResource(R.string.settings_backup_section_title),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_backup_section_subtitle),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (!backupBannerMessage.isNullOrBlank()) {
+                            Text(
+                                text = backupBannerMessage!!,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (backupBannerIsError) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    LocalStatusColors.current.connected
+                                },
+                                modifier = Modifier.testTag("settings_backup_status_text"),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            FilledTonalButton(
+                                onClick = {
+                                    backupBannerMessage = null
+                                    exportBackupLauncher.launch("pocketpilot-servers.ppbackup")
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("settings_backup_export_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.FileUpload,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.backup_export_button),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    backupBannerMessage = null
+                                    importBackupLauncher.launch(arrayOf("*/*"))
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("settings_backup_import_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.FileDownload,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.backup_import_button),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1146,6 +1309,74 @@ fun SettingsScreen(
                 TextButton(onClick = { confirmRemoveService = false }) {
                     Text(text = stringResource(R.string.action_cancel))
                 }
+            },
+        )
+    }
+
+    if (showExportDialog && pendingExportUri != null) {
+        val targetUri = pendingExportUri!!
+        ExportBackupPasswordDialog(
+            isBusy = isBackupBusy,
+            errorMessage = backupDialogError,
+            onConfirm = { password ->
+                scope.launch {
+                    isBackupBusy = true
+                    backupDialogError = null
+                    val encryptedResult = viewModel.exportEncryptedBackup(password)
+                    if (encryptedResult.isFailure) {
+                        isBackupBusy = false
+                        backupDialogError = encryptedResult.exceptionOrNull()?.message ?: "Ошибка шифрования"
+                        return@launch
+                    }
+                    val writeResult = withContext(Dispatchers.IO) {
+                        runCatching {
+                            context.contentResolver.openOutputStream(targetUri)?.use { out ->
+                                out.write(encryptedResult.getOrThrow().toByteArray(Charsets.UTF_8))
+                                out.flush()
+                            } ?: error("Не удалось записать файл")
+                        }
+                    }
+                    isBackupBusy = false
+                    if (writeResult.isSuccess) {
+                        showExportDialog = false
+                        pendingExportUri = null
+                        backupBannerIsError = false
+                        backupBannerMessage = backupExportSuccessMsg
+                    } else {
+                        backupDialogError = writeResult.exceptionOrNull()?.message ?: "Ошибка сохранения файла"
+                    }
+                }
+            },
+            onDismiss = {
+                showExportDialog = false
+                pendingExportUri = null
+                backupDialogError = null
+            },
+        )
+    }
+
+    pendingImportContent?.let { encryptedText ->
+        ImportBackupPasswordDialog(
+            isBusy = isBackupBusy,
+            errorMessage = backupDialogError,
+            onConfirm = { password ->
+                scope.launch {
+                    isBackupBusy = true
+                    backupDialogError = null
+                    val importResult = viewModel.importEncryptedBackup(encryptedText, password)
+                    isBackupBusy = false
+                    importResult.onSuccess { res ->
+                        pendingImportContent = null
+                        backupBannerIsError = false
+                        backupBannerMessage = "Импортировано профилей: ${res.importedCount}, обновлено: ${res.updatedCount}"
+                    }.onFailure { err ->
+                        backupDialogError = err.message ?: "Не удалось расшифровать файл"
+                    }
+                }
+            },
+            onDismiss = {
+                pendingImportContent = null
+                backupDialogError = null
             },
         )
     }

@@ -71,6 +71,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.InputChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -96,12 +97,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.domain.model.AttachedFileRef
+import com.example.domain.model.ModelPricing
 import com.example.domain.model.OpenCodeMessage
 import com.example.domain.model.OpenCodePart
 import com.example.domain.model.OpenCodeServerStatus
 import com.example.domain.model.OpenCodeSession
+import com.example.domain.model.SessionContextUsage
 import com.example.domain.model.SetupWizardStage
 import com.example.domain.model.SseConnectionStatus
+import com.example.domain.model.UsageCalculator
 import com.example.ui.components.StatusChip
 import com.example.ui.theme.LocalStatusColors
 import com.example.ui.theme.MonoFontFamily
@@ -187,6 +191,10 @@ fun ChatScreen(
                 onModelSearchChange = viewModel::onModelSearchQueryChange,
                 onToggleModelSelection = viewModel::toggleModelSelection,
                 onUpdateModelDisplayName = viewModel::updateModelDisplayName,
+                onUpdateModelMultiplier = viewModel::updateModelMultiplier,
+                onUpdateModelCacheMultiplier = viewModel::updateModelCacheMultiplier,
+                onUpdateModelInputPrice = viewModel::updateModelInputPrice,
+                onUpdateModelOutputPrice = viewModel::updateModelOutputPrice,
                 onSelectDefaultModel = viewModel::selectDefaultModelInEditor,
                 onManualModelIdChange = viewModel::onManualModelIdInputChange,
                 onAddManualModel = viewModel::addManualModel,
@@ -847,11 +855,34 @@ private fun ActiveSessionPane(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                val sessionTotals = uiState.sessionUsageTotals
                 if (uiState.isActiveSessionBusy) {
                     Text(
                         text = stringResource(R.string.chat_session_busy),
                         style = MaterialTheme.typography.labelSmall,
                         color = LocalStatusColors.current.warning,
+                    )
+                } else if (sessionTotals.hasAnyTokens) {
+                    val costLabel = when {
+                        sessionTotals.hasAnyCurrencyCost -> UsageCalculator.formatUsd(sessionTotals.totalCurrencyCostUsd)
+                        else -> stringResource(R.string.usage_cost_not_set)
+                    }
+                    val unitsSuffix = if (sessionTotals.hasAnyCustomPricing && sessionTotals.totalProviderUnits > 0.0) {
+                        " • ${UsageCalculator.formatUnits(sessionTotals.totalProviderUnits)}"
+                    } else {
+                        ""
+                    }
+                    Text(
+                        text = stringResource(
+                            R.string.chat_session_tokens_summary,
+                            UsageCalculator.formatTokenCount(sessionTotals.totalTokens),
+                            costLabel,
+                        ) + unitsSuffix,
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("chat_session_usage_header"),
                     )
                 }
             }
@@ -890,6 +921,9 @@ private fun ActiveSessionPane(
                     )
                 }
             }
+        }
+        uiState.sessionContextUsage?.let { ctx ->
+            ContextWindowUsageBar(contextUsage = ctx)
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
@@ -943,6 +977,7 @@ private fun ActiveSessionPane(
                             ChatMessageBubble(
                                 message = msg,
                                 previousUserCreatedAtMillis = prevUserCreatedAt,
+                                pricingByKey = uiState.modelPricingByKey,
                                 onOpenFile = onOpenFile,
                                 onOpenDiff = onOpenDiffSheet,
                                 onCopy = { onCopyMessage(msg) },
@@ -984,9 +1019,80 @@ private fun ActiveSessionPane(
 }
 
 @Composable
+private fun ContextWindowUsageBar(
+    contextUsage: SessionContextUsage,
+) {
+    val warningColor = LocalStatusColors.current.warning
+    val barColor = when {
+        contextUsage.percentInt >= 95 -> MaterialTheme.colorScheme.error
+        contextUsage.isWarning -> warningColor
+        else -> MaterialTheme.colorScheme.primary
+    }
+    val bgColor = if (contextUsage.isWarning) {
+        warningColor.copy(alpha = 0.12f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerLow
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bgColor)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .testTag("chat_context_window_bar"),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (contextUsage.isWarning) {
+                Icon(
+                    imageVector = Icons.Rounded.WarningAmber,
+                    contentDescription = null,
+                    tint = barColor,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+            Text(
+                text = stringResource(
+                    R.string.chat_context_usage_label,
+                    UsageCalculator.formatTokenCount(contextUsage.usedTokens),
+                    UsageCalculator.formatTokenCount(contextUsage.limitTokens),
+                    contextUsage.percentInt,
+                ),
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                color = if (contextUsage.isWarning) barColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (contextUsage.isWarning) {
+                Text(
+                    text = stringResource(R.string.chat_context_warning_80),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = barColor,
+                    maxLines = 1,
+                )
+            }
+        }
+        LinearProgressIndicator(
+            progress = { contextUsage.fraction },
+            color = barColor,
+            trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp)),
+        )
+    }
+}
+
+@Composable
 private fun ChatMessageBubble(
     message: OpenCodeMessage,
     previousUserCreatedAtMillis: Long?,
+    pricingByKey: Map<String, ModelPricing>,
     onOpenFile: (String) -> Unit,
     onOpenDiff: (String?) -> Unit,
     onCopy: () -> Unit,
@@ -1197,6 +1303,46 @@ private fun ChatMessageBubble(
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
                     }
+                }
+            }
+
+            if (!message.isUser && (message.tokens?.hasAny == true || !message.modelId.isNullOrBlank())) {
+                val tokens = message.tokens
+                val pricing = pricingByKey[ModelPricing.keyOf(message.providerId, message.modelId)]
+                val computed = tokens?.let { UsageCalculator.computeMessageCost(it, message.costUsd, pricing) }
+                val notSetText = stringResource(R.string.usage_cost_not_set)
+                val footerText = remember(message.modelId, tokens, computed, pricing, notSetText) {
+                    buildList {
+                        message.modelId?.takeIf { it.isNotBlank() }?.let(::add)
+                        if (tokens != null && tokens.hasAny) {
+                            val ioStr = "${UsageCalculator.formatTokenCount(tokens.input)} / ${UsageCalculator.formatTokenCount(tokens.output)}"
+                            val cacheSuffix = if (tokens.totalCacheTokens > 0L) {
+                                " (+кэш ${UsageCalculator.formatTokenCount(tokens.totalCacheTokens)})"
+                            } else {
+                                ""
+                            }
+                            add("$ioStr ток.$cacheSuffix")
+                        }
+                        if (computed != null) {
+                            if (computed.hasCurrencyCost && computed.currencyCostUsd != null) {
+                                add(UsageCalculator.formatUsd(computed.currencyCostUsd))
+                            } else {
+                                add(notSetText)
+                            }
+                            if (pricing != null && computed.providerUnits > 0.0) {
+                                add("${UsageCalculator.formatUnits(computed.providerUnits)} (оценка)")
+                            }
+                        }
+                    }.joinToString(" • ")
+                }
+                if (footerText.isNotBlank()) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                    Text(
+                        text = footerText,
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("chat_message_usage_footer"),
+                    )
                 }
             }
         }

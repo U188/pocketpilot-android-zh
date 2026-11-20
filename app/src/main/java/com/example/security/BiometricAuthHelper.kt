@@ -1,5 +1,6 @@
 package com.example.security
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.os.Build
 import androidx.biometric.BiometricManager
@@ -20,10 +21,16 @@ object BiometricAuthHelper {
             manager.canAuthenticate(ALLOWED_AUTHENTICATORS_API30)
         } else {
             @Suppress("DEPRECATION")
-            manager.canAuthenticate(
+            val bioResult = manager.canAuthenticate(
                 BiometricManager.Authenticators.BIOMETRIC_WEAK or
                     BiometricManager.Authenticators.DEVICE_CREDENTIAL,
             )
+            if (bioResult == BiometricManager.BIOMETRIC_SUCCESS) {
+                bioResult
+            } else {
+                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                if (km?.isDeviceSecure == true) BiometricManager.BIOMETRIC_SUCCESS else bioResult
+            }
         }
         return result == BiometricManager.BIOMETRIC_SUCCESS
     }

@@ -3,10 +3,13 @@ package com.example.ui.servers
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.repository.ProfileBackupManager
+import com.example.data.repository.ProfileImportResult
 import com.example.data.repository.ServerProfileRepository
 import com.example.data.ssh.SshConnectionManager
 import com.example.domain.model.ServerProfile
 import com.example.domain.model.SshConnectionState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -21,6 +24,7 @@ data class ServersUiState(
 class ServersViewModel(
     private val profileRepository: ServerProfileRepository,
     private val connectionManager: SshConnectionManager,
+    private val profileBackupManager: ProfileBackupManager,
 ) : ViewModel() {
 
     val uiState: StateFlow<ServersUiState> = combine(
@@ -66,13 +70,37 @@ class ServersViewModel(
         }
     }
 
+    suspend fun exportEncryptedBackup(password: String): Result<String> {
+        return try {
+            Result.success(profileBackupManager.exportEncryptedBackup(password))
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun importEncryptedBackup(
+        encryptedContent: String,
+        password: String,
+    ): Result<ProfileImportResult> {
+        return try {
+            Result.success(profileBackupManager.importEncryptedBackup(encryptedContent, password))
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+    }
+
     class Factory(
         private val profileRepository: ServerProfileRepository,
         private val connectionManager: SshConnectionManager,
+        private val profileBackupManager: ProfileBackupManager,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return ServersViewModel(profileRepository, connectionManager) as T
+            return ServersViewModel(profileRepository, connectionManager, profileBackupManager) as T
         }
     }
 }

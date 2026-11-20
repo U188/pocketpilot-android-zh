@@ -7,6 +7,8 @@ import com.example.data.local.AppPreferencesRepository
 import com.example.data.opencode.OpenCodeConfigHelper
 import com.example.data.opencode.OpenCodeServerInstaller
 import com.example.data.repository.KnownHostsRepository
+import com.example.data.repository.ProfileBackupManager
+import com.example.data.repository.ProfileImportResult
 import com.example.data.repository.TerminalSnippetRepository
 import com.example.data.ssh.SshConnectionManager
 import com.example.data.update.AppUpdateManager
@@ -58,6 +60,7 @@ class SettingsViewModel(
     private val connectionManager: SshConnectionManager,
     private val serverInstaller: OpenCodeServerInstaller,
     private val appUpdateManager: AppUpdateManager,
+    private val profileBackupManager: ProfileBackupManager,
 ) : ViewModel() {
 
     private val serverAdminFlow = MutableStateFlow(ServerAdminState())
@@ -407,6 +410,29 @@ class SettingsViewModel(
         serverAdminFlow.update { it.copy(showLogsDialog = false) }
     }
 
+    suspend fun exportEncryptedBackup(password: String): Result<String> {
+        return try {
+            Result.success(profileBackupManager.exportEncryptedBackup(password))
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun importEncryptedBackup(
+        encryptedContent: String,
+        password: String,
+    ): Result<ProfileImportResult> {
+        return try {
+            Result.success(profileBackupManager.importEncryptedBackup(encryptedContent, password))
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+    }
+
     class Factory(
         private val preferencesRepository: AppPreferencesRepository,
         private val knownHostsRepository: KnownHostsRepository,
@@ -414,6 +440,7 @@ class SettingsViewModel(
         private val connectionManager: SshConnectionManager,
         private val serverInstaller: OpenCodeServerInstaller,
         private val appUpdateManager: AppUpdateManager,
+        private val profileBackupManager: ProfileBackupManager,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -424,6 +451,7 @@ class SettingsViewModel(
                 connectionManager = connectionManager,
                 serverInstaller = serverInstaller,
                 appUpdateManager = appUpdateManager,
+                profileBackupManager = profileBackupManager,
             ) as T
         }
     }

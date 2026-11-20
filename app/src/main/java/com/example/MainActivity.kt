@@ -121,10 +121,12 @@ class MainActivity : FragmentActivity() {
                 val observer = LifecycleEventObserver { _, event ->
                     when (event) {
                         Lifecycle.Event.ON_STOP -> {
+                            container.agentNotificationHelper.setAppInForeground(false)
                             lastBackgroundedElapsedMs = SystemClock.elapsedRealtime()
                         }
 
                         Lifecycle.Event.ON_START -> {
+                            container.agentNotificationHelper.setAppInForeground(true)
                             if (settings.biometricLockEnabled &&
                                 lastBackgroundedElapsedMs > 0L &&
                                 BiometricAuthHelper.canAuthenticate(this@MainActivity)

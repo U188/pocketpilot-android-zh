@@ -74,6 +74,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -109,6 +110,10 @@ internal fun ConnectModelPane(
     onModelSearchChange: (String) -> Unit,
     onToggleModelSelection: (String) -> Unit,
     onUpdateModelDisplayName: (String, String) -> Unit,
+    onUpdateModelMultiplier: (String, String) -> Unit,
+    onUpdateModelCacheMultiplier: (String, String) -> Unit,
+    onUpdateModelInputPrice: (String, String) -> Unit,
+    onUpdateModelOutputPrice: (String, String) -> Unit,
     onSelectDefaultModel: (String) -> Unit,
     onManualModelIdChange: (String) -> Unit,
     onAddManualModel: () -> Unit,
@@ -432,9 +437,9 @@ internal fun ConnectModelPane(
                                 )
                             } else {
                                 val listHeight = if (filteredModels.size <= 4) {
-                                    (filteredModels.size * 56 + 8).dp
+                                    (filteredModels.size * 68 + 8).dp
                                 } else {
-                                    248.dp
+                                    272.dp
                                 }
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
@@ -455,6 +460,7 @@ internal fun ConnectModelPane(
                                                     .clickable { onToggleModelSelection(model.id) }
                                                     .padding(horizontal = 8.dp, vertical = 4.dp),
                                                 verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                             ) {
                                                 Checkbox(
                                                     checked = model.selected,
@@ -477,6 +483,21 @@ internal fun ConnectModelPane(
                                                         )
                                                     }
                                                 }
+                                                OutlinedTextField(
+                                                    value = model.multiplierText,
+                                                    onValueChange = { onUpdateModelMultiplier(model.id, it) },
+                                                    prefix = { Text("×", style = MaterialTheme.typography.labelSmall) },
+                                                    placeholder = { Text("1") },
+                                                    singleLine = true,
+                                                    keyboardOptions = KeyboardOptions(
+                                                        keyboardType = KeyboardType.Decimal,
+                                                        imeAction = ImeAction.Done,
+                                                    ),
+                                                    textStyle = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
+                                                    modifier = Modifier
+                                                        .width(84.dp)
+                                                        .testTag("fetched_model_multiplier_${model.id}"),
+                                                )
                                             }
                                         }
                                     }
@@ -484,13 +505,17 @@ internal fun ConnectModelPane(
                             }
                         }
 
-                        // Selected models with editable display names & default picker
+                        // Selected models with editable display names, multipliers, prices & default picker
                         if (selectedModels.isNotEmpty()) {
                             SelectedModelsEditor(
                                 selectedModels = selectedModels,
                                 defaultModelId = effectiveTestModelId,
                                 onSelectDefault = onSelectDefaultModel,
                                 onUpdateName = onUpdateModelDisplayName,
+                                onUpdateMultiplier = onUpdateModelMultiplier,
+                                onUpdateCacheMultiplier = onUpdateModelCacheMultiplier,
+                                onUpdateInputPrice = onUpdateModelInputPrice,
+                                onUpdateOutputPrice = onUpdateModelOutputPrice,
                                 onRemove = onToggleModelSelection,
                             )
                         }
@@ -946,6 +971,10 @@ private fun SelectedModelsEditor(
     defaultModelId: String,
     onSelectDefault: (String) -> Unit,
     onUpdateName: (String, String) -> Unit,
+    onUpdateMultiplier: (String, String) -> Unit,
+    onUpdateCacheMultiplier: (String, String) -> Unit,
+    onUpdateInputPrice: (String, String) -> Unit,
+    onUpdateOutputPrice: (String, String) -> Unit,
     onRemove: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -977,7 +1006,7 @@ private fun SelectedModelsEditor(
             ) {
                 Column(
                     modifier = Modifier.padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1028,6 +1057,84 @@ private fun SelectedModelsEditor(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("selected_model_name_${entry.id}"),
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = entry.multiplierText,
+                            onValueChange = { onUpdateMultiplier(entry.id, it) },
+                            label = { Text(stringResource(R.string.model_multiplier_label)) },
+                            placeholder = { Text("1") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Decimal,
+                                imeAction = ImeAction.Next,
+                            ),
+                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("selected_model_multiplier_${entry.id}"),
+                        )
+                        OutlinedTextField(
+                            value = entry.cacheMultiplierText,
+                            onValueChange = { onUpdateCacheMultiplier(entry.id, it) },
+                            label = { Text(stringResource(R.string.model_cache_multiplier_label)) },
+                            placeholder = { Text("1 / 0") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Decimal,
+                                imeAction = ImeAction.Next,
+                            ),
+                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("selected_model_cache_multiplier_${entry.id}"),
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = entry.inputPricePer1MText,
+                            onValueChange = { onUpdateInputPrice(entry.id, it) },
+                            label = { Text(stringResource(R.string.model_price_input_1m_label)) },
+                            placeholder = { Text("$/1M") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Decimal,
+                                imeAction = ImeAction.Next,
+                            ),
+                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("selected_model_price_in_${entry.id}"),
+                        )
+                        OutlinedTextField(
+                            value = entry.outputPricePer1MText,
+                            onValueChange = { onUpdateOutputPrice(entry.id, it) },
+                            label = { Text(stringResource(R.string.model_price_output_1m_label)) },
+                            placeholder = { Text("$/1M") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Decimal,
+                                imeAction = ImeAction.Done,
+                            ),
+                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("selected_model_price_out_${entry.id}"),
+                        )
+                    }
+
+                    Text(
+                        text = stringResource(R.string.model_pricing_helper_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }

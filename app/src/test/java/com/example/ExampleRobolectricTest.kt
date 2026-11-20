@@ -350,7 +350,7 @@ class ExampleRobolectricTest {
         val defaults = AppSettings()
         assertTrue(defaults.keepAliveInBackground)
         assertFalse(defaults.biometricLockEnabled)
-        assertEquals(60, defaults.biometricLockTimeoutSec)
+        assertEquals(0, defaults.biometricLockTimeoutSec)
         assertFalse(defaults.secureScreenEnabled)
         assertEquals("opencode_ssh_channel", SshConnectionForegroundService.CHANNEL_ID)
     }
