@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Subtle dark terminal frame -->
+    <path
+        android:fillColor="#FF152232"
+        android:pathData="M32,28 L76,28 C78.2,28 80,29.8 80,32 L80,76 C80,78.2 78.2,80 76,80 L32,80 C29.8,80 28,78.2 28,76 L28,32 C28,29.8 29.8,28 32,28 Z" />
+    <!-- Crisp border accent -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF25454B"
+        android:strokeWidth="2"
+        android:pathData="M32,28 L76,28 C78.2,28 80,29.8 80,32 L80,76 C80,78.2 78.2,80 76,80 L32,80 C29.8,80 28,78.2 28,76 L28,32 C28,29.8 29.8,28 32,28 Z" />
+    <!-- Bold terminal chevron '>' -->
+    <path
+        android:fillColor="#FF34D399"
+        android:pathData="M38,41 L43.2,37 L58.5,51.2 C60.1,52.7 60.1,55.3 58.5,56.8 L43.2,71 L38,67 L51.8,54 Z" />
+    <!-- Bold command cursor '_' -->
+    <path
+        android:fillColor="#FF38BDF8"
+        android:pathData="M56,64 L72,64 C73.1,64 74,64.9 74,66 L74,69 C74,70.1 73.1,71 72,71 L56,71 C54.9,71 54,70.1 54,69 L54,66 C54,64.9 54.9,64 56,64 Z" />
+</vector>
