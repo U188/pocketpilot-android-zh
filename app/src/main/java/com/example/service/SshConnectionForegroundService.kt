@@ -8,8 +8,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -31,6 +33,8 @@ class SshConnectionForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var stateObserverJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -57,10 +61,12 @@ class SshConnectionForegroundService : Service() {
         }.getOrDefault(false)
 
         if (!startedInForeground) {
+            releaseLocks()
             runCatching { stopSelf() }
             return START_NOT_STICKY
         }
 
+        acquireLocks()
         observeConnectionState(app.container.sshConnectionManager)
         return START_NOT_STICKY
     }
@@ -69,8 +75,57 @@ class SshConnectionForegroundService : Service() {
 
     override fun onDestroy() {
         stateObserverJob?.cancel()
+        releaseLocks()
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    private fun acquireLocks() {
+        runCatching {
+            if (wakeLock == null) {
+                val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                wakeLock = pm?.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "OpenCode::SshTunnelWakeLock",
+                )?.apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (wakeLock?.isHeld == false) {
+                // Re-acquired on each active session; 12h safety cap prevents stuck wake lock.
+                wakeLock?.acquire(WAKE_LOCK_TIMEOUT_MS)
+            }
+        }
+        runCatching {
+            if (wifiLock == null) {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                @Suppress("DEPRECATION")
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                wifiLock = wm?.createWifiLock(mode, "OpenCode::SshTunnelWifiLock")?.apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (wifiLock?.isHeld == false) {
+                wifiLock?.acquire()
+            }
+        }
+    }
+
+    private fun releaseLocks() {
+        runCatching {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        }
+        runCatching {
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+            }
+        }
     }
 
     private fun observeConnectionState(connectionManager: SshConnectionManager) {
@@ -83,6 +138,7 @@ class SshConnectionForegroundService : Service() {
                     is SshConnectionState.Reconnecting,
                     is SshConnectionState.AwaitingHostKeyVerification,
                     -> {
+                        acquireLocks()
                         runCatching {
                             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                             nm.notify(NOTIFICATION_ID, buildNotification(state))
@@ -113,6 +169,7 @@ class SshConnectionForegroundService : Service() {
     }
 
     private fun stopForegroundAndSelf() {
+        releaseLocks()
         runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
         runCatching { stopSelf() }
     }
@@ -206,6 +263,7 @@ class SshConnectionForegroundService : Service() {
         const val NOTIFICATION_ID = 4096
         const val ACTION_START = "com.example.action.SSH_FGS_START"
         const val ACTION_DISCONNECT = "com.example.action.SSH_FGS_DISCONNECT"
+        private const val WAKE_LOCK_TIMEOUT_MS = 12L * 60L * 60L * 1000L
 
         fun start(context: Context) {
             val intent = Intent(context.applicationContext, SshConnectionForegroundService::class.java).apply {
@@ -228,7 +286,7 @@ class SshConnectionForegroundService : Service() {
 /**
  * Automatically starts and stops [SshConnectionForegroundService] based on SSH session state
  * and the user's background keep-alive preference.
- * Starts only once a connection is established (avoiding rapid start/stop FGS crashes on fast failures).
+ * Starts once a connection is established and stays alive across reconnect cycles.
  */
 class SshForegroundServiceController(
     private val context: Context,

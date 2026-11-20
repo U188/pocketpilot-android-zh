@@ -41,6 +41,8 @@ class AppPreferencesRepository(context: Context) {
             biometricLockEnabled = prefs[KEY_BIOMETRIC_LOCK] ?: false,
             biometricLockTimeoutSec = (prefs[KEY_BIOMETRIC_TIMEOUT_SEC] ?: 60).coerceIn(0, 600),
             secureScreenEnabled = prefs[KEY_SECURE_SCREEN] ?: false,
+            lastChatSessionId = prefs[KEY_LAST_CHAT_SESSION_ID],
+            lastChatDraft = prefs[KEY_LAST_CHAT_DRAFT].orEmpty(),
         )
     }
 
@@ -103,6 +105,20 @@ class AppPreferencesRepository(context: Context) {
         dataStore.edit { it[KEY_SECURE_SCREEN] = enabled }
     }
 
+    suspend fun setLastChatSessionId(sessionId: String?) {
+        dataStore.edit { prefs ->
+            if (sessionId.isNullOrBlank()) {
+                prefs.remove(KEY_LAST_CHAT_SESSION_ID)
+            } else {
+                prefs[KEY_LAST_CHAT_SESSION_ID] = sessionId
+            }
+        }
+    }
+
+    suspend fun setLastChatDraft(draft: String) {
+        dataStore.edit { it[KEY_LAST_CHAT_DRAFT] = draft }
+    }
+
     companion object {
         private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
         private val KEY_DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
@@ -117,5 +133,7 @@ class AppPreferencesRepository(context: Context) {
         private val KEY_BIOMETRIC_LOCK = booleanPreferencesKey("biometric_lock")
         private val KEY_BIOMETRIC_TIMEOUT_SEC = intPreferencesKey("biometric_timeout_sec")
         private val KEY_SECURE_SCREEN = booleanPreferencesKey("secure_screen")
+        private val KEY_LAST_CHAT_SESSION_ID = stringPreferencesKey("last_chat_session_id")
+        private val KEY_LAST_CHAT_DRAFT = stringPreferencesKey("last_chat_draft")
     }
 }

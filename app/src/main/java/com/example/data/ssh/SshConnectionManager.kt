@@ -111,6 +111,8 @@ class SshConnectionManager(
 
     fun getActiveLocalTunnelPort(): Int? = activeTunnel?.localPort
 
+    fun getActiveProfileId(): Long? = extractProfile(_connectionState.value)?.id
+
     fun connect(profileId: Long) {
         manualDisconnectRequested = false
         reconnectJob?.cancel()

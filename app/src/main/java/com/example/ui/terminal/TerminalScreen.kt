@@ -131,7 +131,7 @@ fun TerminalScreen(
         }
     }
 
-    if (!uiState.isConnected) {
+    if (!uiState.isConnected && !uiState.isReconnecting) {
         DisconnectedTerminalPane(
             onOpenServers = onOpenServers,
             modifier = modifier,
@@ -145,13 +145,26 @@ fun TerminalScreen(
             .imePadding(),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            if (uiState.isReconnecting) {
+                Surface(
+                    color = LocalStatusColors.current.warning.copy(alpha = 0.18f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = stringResource(R.string.reconnect_banner_terminal),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LocalStatusColors.current.warning,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
             // Tab Bar
             TerminalTabBar(
                 tabs = uiState.tabs,
                 activeTabId = uiState.activeTab?.id,
                 onSelectTab = viewModel::selectTab,
                 onCloseTab = viewModel::closeTab,
-                onNewTab = viewModel::openNewTab,
+                onNewTab = { viewModel.openNewTab(attachTmux = false) },
             )
 
             // Quick Actions Bar (Snippets, Paste, Copy, Clear, Zoom, Keyboard)

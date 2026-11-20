@@ -5,9 +5,16 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppPreferencesRepository
 import com.example.data.opencode.OpenCodeApiClient
+import com.example.data.opencode.OpenCodeConfigHelper
+import com.example.data.opencode.OpenCodeServerInstaller
 import com.example.data.sftp.SftpRepository
 import com.example.data.ssh.SshConnectionManager
 import com.example.domain.model.AttachedFileRef
+import com.example.domain.model.ConfiguredProviderInfo
+import com.example.domain.model.CustomModelEntry
+import com.example.domain.model.CustomProviderSaveRequest
+import com.example.domain.model.InstallStepStatus
+import com.example.domain.model.ModelTestResult
 import com.example.domain.model.OpenCodeAgent
 import com.example.domain.model.OpenCodeEvent
 import com.example.domain.model.OpenCodeFileDiff
@@ -16,13 +23,17 @@ import com.example.domain.model.OpenCodeModel
 import com.example.domain.model.OpenCodePart
 import com.example.domain.model.OpenCodePermissionRequest
 import com.example.domain.model.OpenCodeProvider
+import com.example.domain.model.OpenCodeServerStatus
 import com.example.domain.model.OpenCodeSession
+import com.example.domain.model.OpenCodeSetupUiState
 import com.example.domain.model.PermissionReplyOption
 import com.example.domain.model.RemoteFileEntry
+import com.example.domain.model.SetupWizardStage
 import com.example.domain.model.SseConnectionStatus
 import com.example.domain.model.SshConnectionState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -34,8 +45,11 @@ import kotlinx.coroutines.launch
 
 data class ChatUiState(
     val isConnected: Boolean = false,
+    val isReconnecting: Boolean = false,
+    val openCodePort: Int = 4096,
     val openCodePortReachable: Boolean = false,
     val sseStatus: SseConnectionStatus = SseConnectionStatus.DISCONNECTED,
+    val setup: OpenCodeSetupUiState = OpenCodeSetupUiState(),
     val sessions: List<OpenCodeSession> = emptyList(),
     val isLoadingSessions: Boolean = false,
     val activeSessionId: String? = null,
@@ -81,6 +95,7 @@ class ChatViewModel(
     private val apiClient: OpenCodeApiClient,
     private val sftpRepository: SftpRepository,
     private val preferencesRepository: AppPreferencesRepository,
+    private val serverInstaller: OpenCodeServerInstaller,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -91,16 +106,32 @@ class ChatViewModel(
 
     private var sseJob: Job? = null
     private var messagesJob: Job? = null
+    private var setupJob: Job? = null
+    private var draftSaveJob: Job? = null
     private var lastTunnelPort: Int? = null
+    private var lastProfileId: Long? = null
+    private var restoredDraftOnce = false
 
     init {
         viewModelScope.launch {
             preferencesRepository.settings.collect { settings ->
                 _uiState.update { state ->
+                    val shouldRestore = !restoredDraftOnce
+                    if (shouldRestore) restoredDraftOnce = true
                     state.copy(
                         selectedProviderId = state.selectedProviderId.ifBlank { settings.defaultProviderId },
                         selectedModelId = state.selectedModelId.ifBlank { settings.defaultModelId },
                         selectedAgentName = state.selectedAgentName.ifBlank { settings.defaultAgentName },
+                        activeSessionId = if (shouldRestore && state.activeSessionId == null) {
+                            settings.lastChatSessionId
+                        } else {
+                            state.activeSessionId
+                        },
+                        composerText = if (shouldRestore && state.composerText.isEmpty()) {
+                            settings.lastChatDraft
+                        } else {
+                            state.composerText
+                        },
                     )
                 }
             }
@@ -110,31 +141,68 @@ class ChatViewModel(
             connectionManager.connectionState.collect { conn ->
                 when (conn) {
                     is SshConnectionState.Connected -> {
+                        val profileChanged = lastProfileId != null && lastProfileId != conn.profile.id
+                        val wasReconnecting = _uiState.value.isReconnecting
                         val tunnelChanged = lastTunnelPort != conn.localTunnelPort
+                        lastProfileId = conn.profile.id
                         lastTunnelPort = conn.localTunnelPort
-                        _uiState.update {
-                            it.copy(
+
+                        _uiState.update { state ->
+                            state.copy(
                                 isConnected = true,
+                                isReconnecting = false,
+                                openCodePort = conn.profile.openCodePort,
                                 openCodePortReachable = conn.openCodePortReachable,
+                                activeSessionId = if (profileChanged) null else state.activeSessionId,
+                                messages = if (profileChanged) emptyList() else state.messages,
+                                sessions = if (profileChanged) emptyList() else state.sessions,
+                                sessionDiffs = if (profileChanged) emptyList() else state.sessionDiffs,
+                                setup = if (profileChanged) {
+                                    OpenCodeSetupUiState(
+                                        serverStatus = OpenCodeServerStatus.CHECKING,
+                                        steps = OpenCodeConfigHelper.buildDefaultSteps(conn.profile.openCodePort),
+                                    )
+                                } else {
+                                    state.setup
+                                },
                             )
                         }
-                        if (tunnelChanged) {
-                            refreshAll()
+
+                        if (!profileChanged && wasReconnecting && _uiState.value.setup.serverStatus == OpenCodeServerStatus.RUNNING) {
+                            // Restore tunnel & SSE seamlessly without resetting chat session or draft
                             startSseStream(conn.localTunnelPort)
+                            refreshAll()
+                        } else if (tunnelChanged || profileChanged || _uiState.value.setup.serverStatus == OpenCodeServerStatus.CHECKING) {
+                            checkOpenCodeServer()
                         }
                     }
 
-                    else -> {
+                    is SshConnectionState.Reconnecting -> {
                         stopSseStream()
                         lastTunnelPort = null
                         _uiState.update {
                             it.copy(
                                 isConnected = false,
+                                isReconnecting = true,
+                                sseStatus = SseConnectionStatus.RECONNECTING,
+                            )
+                        }
+                    }
+
+                    else -> {
+                        stopSseStream()
+                        setupJob?.cancel()
+                        lastTunnelPort = null
+                        _uiState.update {
+                            it.copy(
+                                isConnected = false,
+                                isReconnecting = false,
                                 openCodePortReachable = false,
                                 sseStatus = SseConnectionStatus.DISCONNECTED,
                                 isSending = false,
                                 pendingPermissions = emptyList(),
                                 sessionDiffs = emptyList(),
+                                setup = OpenCodeSetupUiState(),
                             )
                         }
                     }
@@ -230,6 +298,7 @@ class ChatViewModel(
                         errorMessage = null,
                     )
                 }
+                viewModelScope.launch { preferencesRepository.setLastChatSessionId(created.id) }
             }.onFailure { err ->
                 _toastMessages.tryEmit(err.message ?: "Не удалось создать сессию")
             }
@@ -238,12 +307,14 @@ class ChatViewModel(
 
     fun openSession(sessionId: String) {
         _uiState.update { it.copy(activeSessionId = sessionId, sessionDiffs = emptyList(), errorMessage = null) }
+        viewModelScope.launch { preferencesRepository.setLastChatSessionId(sessionId) }
         loadMessages(sessionId)
         loadSessionDiffs(sessionId)
     }
 
     fun closeActiveSession() {
         _uiState.update { it.copy(activeSessionId = null, sessionDiffs = emptyList()) }
+        viewModelScope.launch { preferencesRepository.setLastChatSessionId(null) }
     }
 
     fun renameSession(sessionId: String, newTitle: String) {
@@ -326,6 +397,11 @@ class ChatViewModel(
 
     fun onComposerTextChange(value: String) {
         _uiState.update { it.copy(composerText = value) }
+        draftSaveJob?.cancel()
+        draftSaveJob = viewModelScope.launch {
+            delay(250L)
+            preferencesRepository.setLastChatDraft(value)
+        }
     }
 
     fun attachFile(path: String, name: String) {
@@ -375,6 +451,7 @@ class ChatViewModel(
                     attachedFiles = emptyList(),
                 )
             }
+            preferencesRepository.setLastChatDraft("")
             try {
                 val targetSessionId = state.activeSessionId ?: run {
                     val created = apiClient.createSession()
@@ -689,8 +766,1051 @@ class ChatViewModel(
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Block B: Turnkey Persistent Systemd OpenCode Installer & Model Setup
+    // -------------------------------------------------------------------------
+
+    fun onChatTabVisible() {
+        val state = _uiState.value
+        if (!state.isConnected) return
+        if (state.setup.wizardStage != SetupWizardStage.IDLE || state.setup.isRunningAction) return
+        // Silently re-check if server is running so stopping/removing service in Settings is reflected immediately
+        checkOpenCodeServer(silentIfRunning = state.setup.serverStatus == OpenCodeServerStatus.RUNNING)
+    }
+
+    fun checkOpenCodeServer(silentIfRunning: Boolean = false) {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        val profileId = connected.profile.id
+        val port = connected.profile.openCodePort
+        val tunnelPort = connected.localTunnelPort
+
+        setupJob?.cancel()
+        setupJob = viewModelScope.launch {
+            if (!silentIfRunning) {
+                _uiState.update { state ->
+                    state.copy(
+                        openCodePort = port,
+                        setup = state.setup.copy(
+                            serverStatus = OpenCodeServerStatus.CHECKING,
+                            wizardStage = SetupWizardStage.IDLE,
+                            steps = OpenCodeConfigHelper.buildDefaultSteps(
+                                port = port,
+                                alreadyInstalled = !state.setup.envInfo.opencodePath.isNullOrBlank(),
+                                forceUpdateBinary = state.setup.forceUpdateBinary,
+                                enablePasswordAuth = state.setup.enablePasswordAuth,
+                                verifyPersistence = state.setup.verifyPersistenceOnRestart,
+                            ),
+                            errorMessage = null,
+                            isRunningAction = false,
+                        ),
+                    )
+                }
+            }
+
+            runCatching {
+                serverInstaller.detectServerState(
+                    profileId = profileId,
+                    openCodePort = port,
+                    localTunnelPort = tunnelPort,
+                )
+            }.onSuccess { (status, env) ->
+                val wasRunning = _uiState.value.setup.serverStatus == OpenCodeServerStatus.RUNNING
+                _uiState.update { state ->
+                    state.copy(
+                        openCodePortReachable = status == OpenCodeServerStatus.RUNNING,
+                        setup = state.setup.copy(
+                            serverStatus = status,
+                            envInfo = env,
+                            errorMessage = null,
+                        ),
+                    )
+                }
+                if (status == OpenCodeServerStatus.RUNNING) {
+                    if (!wasRunning || _uiState.value.sessions.isEmpty()) {
+                        refreshAll()
+                        startSseStream(tunnelPort)
+                    }
+                } else {
+                    stopSseStream()
+                }
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                if (!silentIfRunning) {
+                    _uiState.update { state ->
+                        state.copy(
+                            setup = state.setup.copy(
+                                serverStatus = OpenCodeServerStatus.NOT_INSTALLED,
+                                errorMessage = OpenCodeConfigHelper.sanitizeLogs(
+                                    err.message ?: "Не удалось проверить состояние OpenCode на сервере",
+                                ),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun openInstallPreview(forceUpdateBinary: Boolean = false) {
+        val state = _uiState.value
+        val port = state.openCodePort
+        val alreadyInstalled = !state.setup.envInfo.opencodePath.isNullOrBlank()
+        _uiState.update { cur ->
+            cur.copy(
+                setup = cur.setup.copy(
+                    wizardStage = SetupWizardStage.PREVIEW_COMMANDS,
+                    forceUpdateBinary = forceUpdateBinary,
+                    steps = OpenCodeConfigHelper.buildDefaultSteps(
+                        port = port,
+                        alreadyInstalled = alreadyInstalled,
+                        forceUpdateBinary = forceUpdateBinary,
+                        enablePasswordAuth = cur.setup.enablePasswordAuth,
+                        verifyPersistence = cur.setup.verifyPersistenceOnRestart,
+                    ),
+                    failedStepIndex = null,
+                    verificationReport = null,
+                    errorMessage = null,
+                ),
+            )
+        }
+    }
+
+    fun openRepairInstallPreview() {
+        openInstallPreview(forceUpdateBinary = false)
+    }
+
+    fun setEnablePasswordAuth(enabled: Boolean) {
+        _uiState.update { state ->
+            val alreadyInstalled = !state.setup.envInfo.opencodePath.isNullOrBlank()
+            state.copy(
+                setup = state.setup.copy(
+                    enablePasswordAuth = enabled,
+                    steps = OpenCodeConfigHelper.buildDefaultSteps(
+                        port = state.openCodePort,
+                        alreadyInstalled = alreadyInstalled,
+                        forceUpdateBinary = state.setup.forceUpdateBinary,
+                        enablePasswordAuth = enabled,
+                        verifyPersistence = state.setup.verifyPersistenceOnRestart,
+                    ),
+                ),
+            )
+        }
+    }
+
+    fun setVerifyPersistenceOnRestart(enabled: Boolean) {
+        _uiState.update { state ->
+            val alreadyInstalled = !state.setup.envInfo.opencodePath.isNullOrBlank()
+            state.copy(
+                setup = state.setup.copy(
+                    verifyPersistenceOnRestart = enabled,
+                    steps = OpenCodeConfigHelper.buildDefaultSteps(
+                        port = state.openCodePort,
+                        alreadyInstalled = alreadyInstalled,
+                        forceUpdateBinary = state.setup.forceUpdateBinary,
+                        enablePasswordAuth = state.setup.enablePasswordAuth,
+                        verifyPersistence = enabled,
+                    ),
+                ),
+            )
+        }
+    }
+
+    fun cancelSetupWizard() {
+        setupJob?.cancel()
+        _uiState.update { state ->
+            state.copy(
+                setup = state.setup.copy(
+                    wizardStage = SetupWizardStage.IDLE,
+                    isRunningAction = false,
+                    errorMessage = null,
+                    apiKeyInput = "",
+                ),
+            )
+        }
+    }
+
+    fun confirmAndRunInstall(startFromIndex: Int = 0) {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        val profileId = connected.profile.id
+        val port = connected.profile.openCodePort
+        val tunnelPort = connected.localTunnelPort
+
+        setupJob?.cancel()
+        setupJob = viewModelScope.launch {
+            val snapshot = _uiState.value.setup
+            val alreadyInstalled = !snapshot.envInfo.opencodePath.isNullOrBlank()
+            val baseSteps = if (snapshot.steps.size == 5 && startFromIndex > 0) {
+                snapshot.steps.mapIndexed { idx, step ->
+                    if (idx >= startFromIndex) step.copy(status = InstallStepStatus.PENDING, detail = null)
+                    else step
+                }
+            } else {
+                OpenCodeConfigHelper.buildDefaultSteps(
+                    port = port,
+                    alreadyInstalled = alreadyInstalled,
+                    forceUpdateBinary = snapshot.forceUpdateBinary,
+                    enablePasswordAuth = snapshot.enablePasswordAuth,
+                    verifyPersistence = snapshot.verifyPersistenceOnRestart,
+                )
+            }
+
+            _uiState.update { state ->
+                state.copy(
+                    setup = state.setup.copy(
+                        wizardStage = SetupWizardStage.INSTALLING,
+                        steps = baseSteps,
+                        failedStepIndex = null,
+                        errorMessage = null,
+                        verificationReport = null,
+                        isRunningAction = true,
+                        liveLog = if (startFromIndex == 0) "" else state.setup.liveLog + "\n--- Повтор шага ${startFromIndex + 1} ---\n",
+                    ),
+                )
+            }
+
+            var envInfo = _uiState.value.setup.envInfo
+            var binaryPath = envInfo.opencodePath
+            var installedAsUserService = envInfo.isUserService
+            val forceUpdate = _uiState.value.setup.forceUpdateBinary
+            val enablePasswordAuth = _uiState.value.setup.enablePasswordAuth
+            val verifyPersistence = _uiState.value.setup.verifyPersistenceOnRestart
+
+            val appendLog: (String) -> Unit = { line ->
+                val safeLine = OpenCodeConfigHelper.sanitizeLogs(line)
+                _uiState.update { state ->
+                    val nextLog = (state.setup.liveLog + safeLine + "\n").takeLast(28_000)
+                    state.copy(setup = state.setup.copy(liveLog = nextLog))
+                }
+            }
+
+            for (stepIndex in startFromIndex until 5) {
+                updateStepStatus(stepIndex, InstallStepStatus.RUNNING, null)
+                val stepResult = runCatching {
+                    when (stepIndex) {
+                        0 -> {
+                            envInfo = serverInstaller.inspectEnvironment(
+                                openCodePort = port,
+                                requireSystemd = true,
+                                onLog = appendLog,
+                            )
+                            binaryPath = envInfo.opencodePath
+                            _uiState.update { it.copy(setup = it.setup.copy(envInfo = envInfo)) }
+                            val freeLabel = if (envInfo.freeSpaceMb >= 0) "${envInfo.freeSpaceMb} МБ" else "н/д"
+                            "${envInfo.osName} ${envInfo.arch}, свободно $freeLabel, systemd=да"
+                        }
+
+                        1 -> {
+                            if (envInfo.osName.isBlank()) {
+                                envInfo = serverInstaller.inspectEnvironment(port, requireSystemd = true, onLog = appendLog)
+                            }
+                            val (resolved, version) = serverInstaller.ensureOrUpdateOpenCodeBinary(
+                                env = envInfo,
+                                forceUpdate = forceUpdate,
+                                onLog = appendLog,
+                            )
+                            binaryPath = resolved
+                            envInfo = envInfo.copy(opencodePath = resolved, opencodeVersion = version)
+                            _uiState.update { it.copy(setup = it.setup.copy(envInfo = envInfo)) }
+                            if (version != null) "$resolved ($version)" else resolved
+                        }
+
+                        2 -> {
+                            if (envInfo.osName.isBlank()) {
+                                envInfo = serverInstaller.inspectEnvironment(port, requireSystemd = true, onLog = appendLog)
+                            }
+                            serverInstaller.migrateLegacyRuns(envInfo, appendLog)
+                            "Порт $port освобождён, временные службы остановлены"
+                        }
+
+                        3 -> {
+                            if (envInfo.osName.isBlank()) {
+                                envInfo = serverInstaller.inspectEnvironment(port, requireSystemd = true, onLog = appendLog)
+                            }
+                            val resolvedBin = binaryPath ?: envInfo.opencodePath
+                                ?: serverInstaller.ensureOrUpdateOpenCodeBinary(envInfo, forceUpdate = false, onLog = appendLog).first
+                            installedAsUserService = serverInstaller.installPersistentSystemdService(
+                                profileId = profileId,
+                                env = envInfo,
+                                binaryPath = resolvedBin,
+                                port = port,
+                                enablePasswordAuth = enablePasswordAuth,
+                                onLog = appendLog,
+                            )
+                            apiClient.invalidateDiscoveryCache()
+                            val scopeLabel = if (installedAsUserService) "user-service + linger" else "systemd"
+                            val authLabel = if (enablePasswordAuth) ", Basic Auth" else ""
+                            "$scopeLabel opencode-serve (127.0.0.1:$port$authLabel)"
+                        }
+
+                        4 -> {
+                            if (envInfo.osName.isBlank()) {
+                                envInfo = serverInstaller.inspectEnvironment(port, requireSystemd = true, onLog = appendLog)
+                                installedAsUserService = envInfo.isUserService
+                            }
+                            val report = serverInstaller.verifyInstallation(
+                                profileId = profileId,
+                                env = envInfo,
+                                isUserService = installedAsUserService,
+                                port = port,
+                                localTunnelPort = tunnelPort,
+                                verifyPersistence = verifyPersistence,
+                                onLog = appendLog,
+                            )
+                            _uiState.update {
+                                it.copy(setup = it.setup.copy(verificationReport = report))
+                            }
+                            if (report.restartSurvived == true) {
+                                "active, 127.0.0.1:$port, /session JSON, restart пройден"
+                            } else {
+                                "active, 127.0.0.1:$port, /session JSON OK"
+                            }
+                        }
+
+                        else -> ""
+                    }
+                }
+
+                if (stepResult.isSuccess) {
+                    updateStepStatus(stepIndex, InstallStepStatus.SUCCESS, stepResult.getOrNull())
+                } else {
+                    val err = stepResult.exceptionOrNull()
+                    if (err is CancellationException) throw err
+                    val msg = OpenCodeConfigHelper.sanitizeLogs(err?.message ?: "Ошибка выполнения шага")
+                    updateStepStatus(stepIndex, InstallStepStatus.ERROR, msg)
+                    appendLog("✗ Ошибка: $msg")
+                    _uiState.update { state ->
+                        state.copy(
+                            setup = state.setup.copy(
+                                isRunningAction = false,
+                                failedStepIndex = stepIndex,
+                                errorMessage = msg,
+                            ),
+                        )
+                    }
+                    return@launch
+                }
+            }
+
+            _uiState.update { state ->
+                state.copy(
+                    openCodePortReachable = true,
+                    setup = state.setup.copy(
+                        serverStatus = OpenCodeServerStatus.RUNNING,
+                        wizardStage = SetupWizardStage.CONNECT_MODEL,
+                        isRunningAction = false,
+                        failedStepIndex = null,
+                        errorMessage = null,
+                    ),
+                )
+            }
+            loadConfiguredProviders()
+        }
+    }
+
+    fun retryFailedStep() {
+        val idx = _uiState.value.setup.failedStepIndex ?: 0
+        confirmAndRunInstall(startFromIndex = idx)
+    }
+
+    fun startStoppedServer() {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        val profileId = connected.profile.id
+        val port = connected.profile.openCodePort
+        val tunnelPort = connected.localTunnelPort
+
+        setupJob?.cancel()
+        setupJob = viewModelScope.launch {
+            _uiState.update { state ->
+                state.copy(
+                    setup = state.setup.copy(
+                        isRunningAction = true,
+                        errorMessage = null,
+                        liveLog = "",
+                    ),
+                )
+            }
+            val appendLog: (String) -> Unit = { line ->
+                val safeLine = OpenCodeConfigHelper.sanitizeLogs(line)
+                _uiState.update { state ->
+                    val nextLog = (state.setup.liveLog + safeLine + "\n").takeLast(16_000)
+                    state.copy(setup = state.setup.copy(liveLog = nextLog))
+                }
+            }
+
+            runCatching {
+                val env = serverInstaller.inspectEnvironment(openCodePort = port, requireSystemd = true, onLog = appendLog)
+                if (!env.hasPersistentUnit) {
+                    // Open preview to install persistent systemd unit cleanly
+                    _uiState.update { state ->
+                        state.copy(
+                            setup = state.setup.copy(
+                                envInfo = env,
+                                isRunningAction = false,
+                            ),
+                        )
+                    }
+                    openInstallPreview(forceUpdateBinary = false)
+                    return@launch
+                }
+                serverInstaller.startExistingServer(
+                    profileId = profileId,
+                    env = env,
+                    port = port,
+                    localTunnelPort = tunnelPort,
+                    onLog = appendLog,
+                )
+            }.onSuccess {
+                apiClient.invalidateDiscoveryCache()
+                _uiState.update { state ->
+                    state.copy(
+                        openCodePortReachable = true,
+                        setup = state.setup.copy(
+                            serverStatus = OpenCodeServerStatus.RUNNING,
+                            wizardStage = SetupWizardStage.IDLE,
+                            isRunningAction = false,
+                            errorMessage = null,
+                        ),
+                    )
+                }
+                refreshAll()
+                startSseStream(tunnelPort)
+                _toastMessages.tryEmit("Служба OpenCode запущена")
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                val msg = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "Не удалось запустить сервер OpenCode")
+                _uiState.update { state ->
+                    state.copy(
+                        setup = state.setup.copy(
+                            isRunningAction = false,
+                            errorMessage = msg,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun openConnectModelStage() {
+        _uiState.update { state ->
+            state.copy(
+                setup = state.setup.copy(
+                    wizardStage = SetupWizardStage.CONNECT_MODEL,
+                    useCustomProvider = true,
+                    apiKeyInput = "",
+                    errorMessage = null,
+                    fetchModelsError = null,
+                    modelTestResult = null,
+                    configuredProvidersError = null,
+                ),
+            )
+        }
+        loadConfiguredProviders()
+    }
+
+    fun loadConfiguredProviders() {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    setup = it.setup.copy(
+                        isLoadingConfiguredProviders = true,
+                        configuredProvidersError = null,
+                    ),
+                )
+            }
+            runCatching {
+                serverInstaller.providerManager.loadConfiguredProviders(connected.profile.openCodePort)
+            }.onSuccess { list ->
+                _uiState.update {
+                    it.copy(
+                        setup = it.setup.copy(
+                            configuredProviders = list,
+                            isLoadingConfiguredProviders = false,
+                            configuredProvidersError = null,
+                        ),
+                    )
+                }
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _uiState.update {
+                    it.copy(
+                        setup = it.setup.copy(
+                            isLoadingConfiguredProviders = false,
+                            configuredProvidersError = OpenCodeConfigHelper.sanitizeLogs(
+                                err.message ?: "Не удалось прочитать список провайдеров",
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun startNewProviderEditor() {
+        _uiState.update { state ->
+            state.copy(
+                setup = state.setup.copy(
+                    useCustomProvider = true,
+                    editingProviderId = null,
+                    editingMaskedApiKey = null,
+                    providerName = "Custom OpenAI",
+                    baseUrl = "https://api.openai.com/v1",
+                    apiKeyInput = "",
+                    availableModels = emptyList(),
+                    modelSearchQuery = "",
+                    manualModelIdInput = "",
+                    defaultSelectedModelId = "",
+                    fetchModelsError = null,
+                    fetchModelsCount = null,
+                    modelTestResult = null,
+                    errorMessage = null,
+                ),
+            )
+        }
+    }
+
+    fun startEditProvider(provider: ConfiguredProviderInfo) {
+        val existingEntries = provider.models.map { m ->
+            CustomModelEntry(id = m.id, displayName = m.name, selected = true)
+        }
+        val initialDefault = provider.defaultModelId
+            ?.takeIf { defId -> existingEntries.any { it.id == defId } }
+            ?: existingEntries.firstOrNull()?.id.orEmpty()
+
+        _uiState.update { state ->
+            state.copy(
+                setup = state.setup.copy(
+                    useCustomProvider = true,
+                    editingProviderId = provider.providerId,
+                    editingMaskedApiKey = provider.maskedApiKey,
+                    providerName = provider.name,
+                    baseUrl = provider.baseUrl.ifBlank { "https://api.openai.com/v1" },
+                    // Never store or prefill raw API keys in the app
+                    apiKeyInput = "",
+                    availableModels = existingEntries,
+                    modelSearchQuery = "",
+                    manualModelIdInput = "",
+                    defaultSelectedModelId = initialDefault,
+                    fetchModelsError = null,
+                    fetchModelsCount = null,
+                    modelTestResult = null,
+                    errorMessage = null,
+                ),
+            )
+        }
+    }
+
+    fun onSelectCustomProvider(useCustom: Boolean) {
+        _uiState.update { state ->
+            state.copy(
+                setup = state.setup.copy(
+                    useCustomProvider = useCustom,
+                    errorMessage = null,
+                ),
+            )
+        }
+    }
+
+    fun onProviderNameChange(value: String) {
+        _uiState.update { it.copy(setup = it.setup.copy(providerName = value, errorMessage = null)) }
+    }
+
+    fun onBaseUrlChange(value: String) {
+        _uiState.update {
+            it.copy(
+                setup = it.setup.copy(
+                    baseUrl = value,
+                    fetchModelsError = null,
+                    modelTestResult = null,
+                    errorMessage = null,
+                ),
+            )
+        }
+    }
+
+    fun onApiKeyChange(value: String) {
+        _uiState.update {
+            it.copy(
+                setup = it.setup.copy(
+                    apiKeyInput = value,
+                    fetchModelsError = null,
+                    modelTestResult = null,
+                    errorMessage = null,
+                ),
+            )
+        }
+    }
+
+    fun onModelSearchQueryChange(value: String) {
+        _uiState.update { it.copy(setup = it.setup.copy(modelSearchQuery = value)) }
+    }
+
+    fun onManualModelIdInputChange(value: String) {
+        _uiState.update { it.copy(setup = it.setup.copy(manualModelIdInput = value, errorMessage = null)) }
+    }
+
+    fun addManualModel() {
+        _uiState.update { state ->
+            val rawId = state.setup.manualModelIdInput.trim()
+            if (rawId.isEmpty()) return@update state
+            val existing = state.setup.availableModels
+            val updated = if (existing.any { it.id == rawId }) {
+                existing.map { if (it.id == rawId) it.copy(selected = true) else it }
+            } else {
+                listOf(CustomModelEntry(id = rawId, displayName = rawId, selected = true)) + existing
+            }
+            val nextDefault = state.setup.defaultSelectedModelId.ifBlank { rawId }
+            state.copy(
+                setup = state.setup.copy(
+                    availableModels = updated,
+                    manualModelIdInput = "",
+                    defaultSelectedModelId = nextDefault,
+                    errorMessage = null,
+                ),
+            )
+        }
+    }
+
+    fun toggleModelSelection(modelId: String) {
+        _uiState.update { state ->
+            val updated = state.setup.availableModels.map { entry ->
+                if (entry.id == modelId) entry.copy(selected = !entry.selected) else entry
+            }
+            val selectedIds = updated.filter { it.selected }.map { it.id }
+            val nextDefault = when {
+                state.setup.defaultSelectedModelId in selectedIds -> state.setup.defaultSelectedModelId
+                else -> selectedIds.firstOrNull().orEmpty()
+            }
+            state.copy(
+                setup = state.setup.copy(
+                    availableModels = updated,
+                    defaultSelectedModelId = nextDefault,
+                    errorMessage = null,
+                ),
+            )
+        }
+    }
+
+    fun updateModelDisplayName(modelId: String, newName: String) {
+        _uiState.update { state ->
+            val updated = state.setup.availableModels.map { entry ->
+                if (entry.id == modelId) entry.copy(displayName = newName) else entry
+            }
+            state.copy(setup = state.setup.copy(availableModels = updated))
+        }
+    }
+
+    fun selectDefaultModelInEditor(modelId: String) {
+        _uiState.update { state ->
+            val updated = state.setup.availableModels.map { entry ->
+                if (entry.id == modelId) entry.copy(selected = true) else entry
+            }
+            state.copy(
+                setup = state.setup.copy(
+                    availableModels = updated,
+                    defaultSelectedModelId = modelId,
+                    modelTestResult = state.setup.modelTestResult?.takeIf { it.modelId == modelId },
+                ),
+            )
+        }
+    }
+
+    fun fetchModelsFromProvider() {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        val s = _uiState.value.setup
+        if (s.baseUrl.isBlank()) return
+        val secretKey = s.apiKeyInput
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    setup = it.setup.copy(
+                        isFetchingModels = true,
+                        fetchModelsError = null,
+                        errorMessage = null,
+                    ),
+                )
+            }
+            runCatching {
+                serverInstaller.providerManager.fetchRemoteModels(
+                    baseUrl = s.baseUrl,
+                    apiKeyInput = secretKey,
+                    existingProviderId = s.editingProviderId,
+                    openCodePort = connected.profile.openCodePort,
+                )
+            }.onSuccess { fetched ->
+                _uiState.update { state ->
+                    val previouslySelectedById = state.setup.availableModels
+                        .filter { it.selected }
+                        .associateBy { it.id }
+
+                    val mergedMap = LinkedHashMap<String, CustomModelEntry>()
+                    // Preserve already-selected models (with any customized display names)
+                    previouslySelectedById.values.forEach { entry ->
+                        mergedMap[entry.id] = entry
+                    }
+                    // Add fetched models (name initialized from ID)
+                    fetched.forEach { remote ->
+                        if (!mergedMap.containsKey(remote.id)) {
+                            mergedMap[remote.id] = remote
+                        }
+                    }
+
+                    val mergedList = mergedMap.values.toList().let { list ->
+                        // If nothing is selected yet and only 1 model exists, pre-select it for convenience
+                        if (list.none { it.selected } && list.size == 1) {
+                            listOf(list.first().copy(selected = true))
+                        } else {
+                            list
+                        }
+                    }
+                    val nextDefault = state.setup.defaultSelectedModelId
+                        .takeIf { defId -> mergedList.any { it.selected && it.id == defId } }
+                        ?: mergedList.firstOrNull { it.selected }?.id.orEmpty()
+
+                    state.copy(
+                        setup = state.setup.copy(
+                            availableModels = mergedList,
+                            defaultSelectedModelId = nextDefault,
+                            isFetchingModels = false,
+                            fetchModelsError = null,
+                            fetchModelsCount = fetched.size,
+                        ),
+                    )
+                }
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
+                    err.message ?: "Не удалось загрузить список моделей",
+                    listOf(secretKey),
+                )
+                _uiState.update {
+                    it.copy(
+                        setup = it.setup.copy(
+                            isFetchingModels = false,
+                            fetchModelsError = safeMsg,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun testSelectedModel() {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        val s = _uiState.value.setup
+        val targetModelId = s.effectiveTestModelId
+        if (s.baseUrl.isBlank() || targetModelId.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    setup = it.setup.copy(
+                        modelTestResult = ModelTestResult(
+                            success = false,
+                            httpCode = null,
+                            modelId = targetModelId,
+                            message = "Сначала выберите хотя бы одну модель",
+                        ),
+                    ),
+                )
+            }
+            return
+        }
+        val secretKey = s.apiKeyInput
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    setup = it.setup.copy(
+                        isTestingModel = true,
+                        modelTestResult = null,
+                    ),
+                )
+            }
+            runCatching {
+                serverInstaller.providerManager.testModelCompletion(
+                    baseUrl = s.baseUrl,
+                    apiKeyInput = secretKey,
+                    existingProviderId = s.editingProviderId,
+                    modelId = targetModelId,
+                    openCodePort = connected.profile.openCodePort,
+                )
+            }.onSuccess { result ->
+                _uiState.update {
+                    it.copy(
+                        setup = it.setup.copy(
+                            isTestingModel = false,
+                            modelTestResult = result,
+                        ),
+                    )
+                }
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
+                    err.message ?: "Не удалось проверить модель",
+                    listOf(secretKey),
+                )
+                _uiState.update {
+                    it.copy(
+                        setup = it.setup.copy(
+                            isTestingModel = false,
+                            modelTestResult = ModelTestResult(
+                                success = false,
+                                httpCode = null,
+                                modelId = targetModelId,
+                                message = safeMsg,
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun saveCustomProviderAndFinish() {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        val s = _uiState.value.setup
+        if (s.baseUrl.isBlank()) return
+
+        val chosenModels = s.selectedModels.ifEmpty {
+            val manual = s.manualModelIdInput.trim()
+            if (manual.isNotEmpty()) listOf(CustomModelEntry(id = manual, displayName = manual, selected = true))
+            else emptyList()
+        }
+        if (chosenModels.isEmpty()) {
+            _uiState.update {
+                it.copy(setup = it.setup.copy(errorMessage = "Выберите хотя бы одну модель из списка или введите ID вручную"))
+            }
+            return
+        }
+
+        val secretKey = s.apiKeyInput
+        val isEditing = !s.editingProviderId.isNullOrBlank()
+        val providerId = s.editingProviderId ?: OpenCodeConfigHelper.sanitizeProviderId(s.providerName)
+        val defaultModelId = s.defaultSelectedModelId
+            .takeIf { id -> chosenModels.any { it.id == id } }
+            ?: chosenModels.first().id
+
+        val request = CustomProviderSaveRequest(
+            providerId = providerId,
+            providerName = s.providerName.trim().ifBlank { providerId },
+            baseUrl = s.baseUrl.trim(),
+            apiKey = secretKey.trim().takeIf { it.isNotEmpty() },
+            selectedModels = chosenModels,
+            defaultModelId = defaultModelId,
+            replaceProviderModels = isEditing,
+        )
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    setup = it.setup.copy(
+                        isSavingProvider = true,
+                        errorMessage = null,
+                    ),
+                )
+            }
+            runCatching {
+                serverInstaller.providerManager.saveProviderAndRestart(
+                    profileId = connected.profile.id,
+                    request = request,
+                    openCodePort = connected.profile.openCodePort,
+                    localTunnelPort = connected.localTunnelPort,
+                )
+            }.onSuccess { (savedProviderId, savedDefaultModelId) ->
+                apiClient.invalidateDiscoveryCache()
+                // Purge API key immediately from memory; it is never stored in the app
+                _uiState.update { state ->
+                    state.copy(
+                        selectedProviderId = savedProviderId,
+                        selectedModelId = savedDefaultModelId,
+                        openCodePortReachable = true,
+                        setup = state.setup.copy(
+                            serverStatus = OpenCodeServerStatus.RUNNING,
+                            wizardStage = SetupWizardStage.IDLE,
+                            isSavingProvider = false,
+                            editingProviderId = null,
+                            editingMaskedApiKey = null,
+                            apiKeyInput = "",
+                            modelTestResult = null,
+                            fetchModelsError = null,
+                            errorMessage = null,
+                        ),
+                    )
+                }
+                preferencesRepository.setDefaultModel(savedProviderId, savedDefaultModelId)
+                refreshAll()
+                startSseStream(connected.localTunnelPort)
+                _toastMessages.tryEmit("Провайдер сохранён, служба перезапущена, выбрана модель $savedDefaultModelId")
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
+                    err.message ?: "Не удалось сохранить конфигурацию на сервере",
+                    listOf(secretKey),
+                )
+                _uiState.update {
+                    it.copy(
+                        setup = it.setup.copy(
+                            isSavingProvider = false,
+                            errorMessage = safeMsg,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun changeProviderApiKey(provider: ConfiguredProviderInfo, newApiKey: String) {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        val cleanKey = newApiKey.trim()
+        if (cleanKey.isEmpty()) return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    setup = it.setup.copy(
+                        isProviderActionBusy = true,
+                        configuredProvidersError = null,
+                        errorMessage = null,
+                    ),
+                )
+            }
+            runCatching {
+                serverInstaller.providerManager.updateProviderKeyAndRestart(
+                    profileId = connected.profile.id,
+                    providerId = provider.providerId,
+                    baseUrl = provider.baseUrl,
+                    newApiKey = cleanKey,
+                    openCodePort = connected.profile.openCodePort,
+                    localTunnelPort = connected.localTunnelPort,
+                )
+            }.onSuccess {
+                apiClient.invalidateDiscoveryCache()
+                _uiState.update { state ->
+                    state.copy(
+                        setup = state.setup.copy(
+                            isProviderActionBusy = false,
+                            editingMaskedApiKey = if (state.setup.editingProviderId == provider.providerId) {
+                                OpenCodeConfigHelper.maskApiKey(cleanKey)
+                            } else {
+                                state.setup.editingMaskedApiKey
+                            },
+                            configuredProvidersError = null,
+                        ),
+                    )
+                }
+                loadConfiguredProviders()
+                refreshAll()
+                _toastMessages.tryEmit("API-ключ провайдера «${provider.name}» обновлён")
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
+                    err.message ?: "Не удалось обновить API-ключ",
+                    listOf(cleanKey),
+                )
+                _uiState.update {
+                    it.copy(
+                        setup = it.setup.copy(
+                            isProviderActionBusy = false,
+                            configuredProvidersError = safeMsg,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun deleteConfiguredProvider(provider: ConfiguredProviderInfo) {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected ?: return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    setup = it.setup.copy(
+                        isProviderActionBusy = true,
+                        configuredProvidersError = null,
+                        errorMessage = null,
+                    ),
+                )
+            }
+            runCatching {
+                serverInstaller.providerManager.deleteProviderAndRestart(
+                    profileId = connected.profile.id,
+                    providerId = provider.providerId,
+                    openCodePort = connected.profile.openCodePort,
+                    localTunnelPort = connected.localTunnelPort,
+                )
+            }.onSuccess {
+                apiClient.invalidateDiscoveryCache()
+                val wasSelected = _uiState.value.selectedProviderId == provider.providerId
+                val wasEditing = _uiState.value.setup.editingProviderId == provider.providerId
+                _uiState.update { state ->
+                    state.copy(
+                        selectedProviderId = if (wasSelected) "" else state.selectedProviderId,
+                        selectedModelId = if (wasSelected) "" else state.selectedModelId,
+                        setup = state.setup.copy(
+                            isProviderActionBusy = false,
+                            configuredProvidersError = null,
+                        ),
+                    )
+                }
+                if (wasSelected) {
+                    preferencesRepository.setDefaultModel("", "")
+                }
+                if (wasEditing) {
+                    startNewProviderEditor()
+                }
+                loadConfiguredProviders()
+                refreshAll()
+                _toastMessages.tryEmit("Провайдер «${provider.name}» удалён")
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
+                    err.message ?: "Не удалось удалить провайдер",
+                )
+                _uiState.update {
+                    it.copy(
+                        setup = it.setup.copy(
+                            isProviderActionBusy = false,
+                            configuredProvidersError = safeMsg,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun finishWithFreeModels() {
+        val connected = connectionManager.connectionState.value as? SshConnectionState.Connected
+        apiClient.invalidateDiscoveryCache()
+        _uiState.update { state ->
+            state.copy(
+                openCodePortReachable = true,
+                setup = state.setup.copy(
+                    serverStatus = OpenCodeServerStatus.RUNNING,
+                    wizardStage = SetupWizardStage.IDLE,
+                    apiKeyInput = "",
+                    errorMessage = null,
+                ),
+            )
+        }
+        if (connected != null) {
+            refreshAll()
+            startSseStream(connected.localTunnelPort)
+        }
+    }
+
+    private fun updateStepStatus(index: Int, status: InstallStepStatus, detail: String?) {
+        _uiState.update { state ->
+            val updated = state.setup.steps.mapIndexed { idx, step ->
+                if (idx == index) step.copy(status = status, detail = detail) else step
+            }
+            state.copy(setup = state.setup.copy(steps = updated))
+        }
+    }
+
     override fun onCleared() {
         stopSseStream()
+        setupJob?.cancel()
+        draftSaveJob?.cancel()
         super.onCleared()
     }
 
@@ -699,6 +1819,7 @@ class ChatViewModel(
         private val apiClient: OpenCodeApiClient,
         private val sftpRepository: SftpRepository,
         private val preferencesRepository: AppPreferencesRepository,
+        private val serverInstaller: OpenCodeServerInstaller,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -707,6 +1828,7 @@ class ChatViewModel(
                 apiClient = apiClient,
                 sftpRepository = sftpRepository,
                 preferencesRepository = preferencesRepository,
+                serverInstaller = serverInstaller,
             ) as T
         }
     }

@@ -384,4 +384,224 @@ class ExampleRobolectricTest {
         com.example.crash.CrashReporter.clearPendingCrash(context)
         assertEquals(null, com.example.crash.CrashReporter.readPendingCrash(context))
     }
+
+    @Test
+    fun `opencode systemd unit binds strictly to 127_0_0_1 with restart always and env file`() {
+        val unit = com.example.data.opencode.OpenCodeConfigHelper.buildSystemdUnit(
+            opencodeBinaryPath = "/home/ubuntu/.opencode/bin/opencode",
+            userName = "ubuntu",
+            homeDir = "/home/ubuntu",
+            port = 4096,
+            isUserService = false,
+            envFilePath = "/etc/opencode-serve.env",
+        )
+        assertTrue(unit.contains("ExecStart=/home/ubuntu/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4096"))
+        assertTrue(unit.contains("Environment=HOME=/home/ubuntu"))
+        assertTrue(unit.contains("WorkingDirectory=/home/ubuntu"))
+        assertTrue(unit.contains("EnvironmentFile=/etc/opencode-serve.env"))
+        assertTrue(unit.contains("Restart=always"))
+        assertTrue(unit.contains("RestartSec=3"))
+        assertTrue(unit.contains("User=ubuntu"))
+        assertTrue(unit.contains("WantedBy=multi-user.target"))
+        assertFalse(unit.contains("0.0.0.0"))
+
+        val userUnit = com.example.data.opencode.OpenCodeConfigHelper.buildSystemdUnit(
+            opencodeBinaryPath = "/home/dev/.opencode/bin/opencode",
+            userName = "dev",
+            homeDir = "/home/dev",
+            port = 4096,
+            isUserService = true,
+            envFilePath = "/home/dev/.config/opencode/opencode-serve.env",
+        )
+        assertTrue(userUnit.contains("WantedBy=default.target"))
+        assertFalse(userUnit.contains("User=dev"))
+    }
+
+    @Test
+    fun `opencode installer builds 5 idempotent steps and strong password env file`() {
+        val steps = com.example.data.opencode.OpenCodeConfigHelper.buildDefaultSteps(
+            port = 4096,
+            alreadyInstalled = true,
+            forceUpdateBinary = false,
+            enablePasswordAuth = true,
+            verifyPersistence = true,
+        )
+        assertEquals(5, steps.size)
+        assertTrue(steps[1].title.contains("Проверка бинарника"))
+        assertTrue(steps[2].id == com.example.data.opencode.OpenCodeConfigHelper.STEP_MIGRATE)
+        assertTrue(steps[4].commandPreview.contains("systemctl restart"))
+
+        val pass = com.example.data.opencode.OpenCodeConfigHelper.generateStrongPassword(28)
+        assertEquals(28, pass.length)
+        val envFile = com.example.data.opencode.OpenCodeConfigHelper.buildEnvFileContent("opencode", pass)
+        assertTrue(envFile.contains("OPENCODE_SERVER_USERNAME=opencode"))
+        assertTrue(envFile.contains("OPENCODE_SERVER_PASSWORD=$pass"))
+    }
+
+    @Test
+    fun `opencode config merge preserves existing settings and adds openai-compatible provider`() {
+        val existing = """
+            {
+              "theme": "dark",
+              "provider": {
+                "anthropic": {
+                  "name": "Anthropic"
+                }
+              }
+            }
+        """.trimIndent()
+        val merged = com.example.data.opencode.OpenCodeConfigHelper.mergeOpenAiCompatibleProvider(
+            existingJson = existing,
+            config = com.example.domain.model.CustomProviderConfig(
+                providerId = "my-proxy",
+                providerName = "My Proxy",
+                baseUrl = "https://proxy.example.com/v1/",
+                apiKey = "sk-test-secret-1234567890",
+                modelId = "deepseek-chat",
+                modelDisplayName = "DeepSeek Chat",
+            ),
+        )
+        val root = org.json.JSONObject(merged)
+        assertEquals("dark", root.getString("theme"))
+        assertEquals("my-proxy/deepseek-chat", root.getString("model"))
+        val providers = root.getJSONObject("provider")
+        assertTrue(providers.has("anthropic"))
+        val custom = providers.getJSONObject("my-proxy")
+        assertEquals("@ai-sdk/openai-compatible", custom.getString("npm"))
+        assertEquals("https://proxy.example.com/v1", custom.getJSONObject("options").getString("baseURL"))
+        assertEquals("sk-test-secret-1234567890", custom.getJSONObject("options").getString("apiKey"))
+        assertEquals("DeepSeek Chat", custom.getJSONObject("models").getJSONObject("deepseek-chat").getString("name"))
+    }
+
+    @Test
+    fun `log sanitizer redacts api keys basic auth env passwords and explicit secrets`() {
+        val raw = """Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.secret Authorization: Basic dXNlcjpwYXNzMTIzNA== OPENCODE_SERVER_PASSWORD=TopSecretValue "apiKey": "my-secret" key=sk-1234567890abcdef pass=SuperSecretPass"""
+        val sanitized = com.example.data.opencode.OpenCodeConfigHelper.sanitizeLogs(
+            raw = raw,
+            explicitSecrets = listOf("SuperSecretPass"),
+        )
+        assertFalse(sanitized.contains("eyJhbGciOiJIUzI1NiJ9"))
+        assertFalse(sanitized.contains("dXNlcjpwYXNzMTIzNA=="))
+        assertFalse(sanitized.contains("TopSecretValue"))
+        assertFalse(sanitized.contains("my-secret"))
+        assertFalse(sanitized.contains("sk-1234567890abcdef"))
+        assertFalse(sanitized.contains("SuperSecretPass"))
+        assertTrue(sanitized.contains("[REDACTED]"))
+    }
+
+    @Test
+    fun `provider helper masks keys parses configured providers updates keys and removes safely`() {
+        val helper = com.example.data.opencode.OpenCodeConfigHelper
+        assertEquals("••••9876", helper.maskApiKey("sk-live-secret-9876"))
+        assertEquals("••••", helper.maskApiKey("1234"))
+        assertEquals(null, helper.maskApiKey("   "))
+
+        val existing = """
+            {
+              // user comment preserved safely when reading
+              "theme": "dark",
+              "model": "openrouter/openai/gpt-4o",
+              "provider": {
+                "anthropic": {
+                  "name": "Anthropic",
+                  "options": {"apiKey": "sk-ant-11112222"}
+                },
+                "openrouter": {
+                  "npm": "@ai-sdk/openai-compatible",
+                  "name": "OpenRouter",
+                  "options": {
+                    "baseURL": "https://openrouter.ai/api/v1",
+                    "apiKey": "sk-or-v1-abcdef9876",
+                    "timeout": 60000
+                  },
+                  "models": {
+                    "openai/gpt-4o": {"name": "GPT-4o", "limit": {"context": 128000}},
+                    "deepseek/deepseek-chat": {"name": "DeepSeek Chat"}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val parsed = helper.parseConfiguredProviders(existing)
+        assertEquals(2, parsed.size)
+        val openRouter = parsed.first { it.providerId == "openrouter" }
+        assertTrue(openRouter.isDefaultProvider)
+        assertEquals("openai/gpt-4o", openRouter.defaultModelId)
+        assertEquals("••••9876", openRouter.maskedApiKey)
+        assertTrue(openRouter.hasApiKey)
+        assertEquals(2, openRouter.models.size)
+
+        // Multi-model edit keeping existing apiKey (apiKey = null) and preserving extra options & other providers
+        val merged = helper.mergeOpenAiCompatibleProvider(
+            existingJson = existing,
+            request = com.example.domain.model.CustomProviderSaveRequest(
+                providerId = "openrouter",
+                providerName = "OpenRouter Pro",
+                baseUrl = "https://openrouter.ai/api/v1/",
+                apiKey = null,
+                selectedModels = listOf(
+                    com.example.domain.model.CustomModelEntry("openai/gpt-4o", "GPT-4o Custom", selected = true),
+                    com.example.domain.model.CustomModelEntry("qwen/qwen-2.5-coder", "Qwen Coder", selected = true),
+                ),
+                defaultModelId = "qwen/qwen-2.5-coder",
+                replaceProviderModels = true,
+            ),
+        )
+        val mergedRoot = org.json.JSONObject(merged)
+        assertEquals("dark", mergedRoot.getString("theme"))
+        assertEquals("openrouter/qwen/qwen-2.5-coder", mergedRoot.getString("model"))
+        val orObj = mergedRoot.getJSONObject("provider").getJSONObject("openrouter")
+        assertEquals("OpenRouter Pro", orObj.getString("name"))
+        assertEquals("sk-or-v1-abcdef9876", orObj.getJSONObject("options").getString("apiKey"))
+        assertEquals(60000, orObj.getJSONObject("options").getInt("timeout"))
+        assertTrue(mergedRoot.getJSONObject("provider").has("anthropic"))
+        assertEquals(2, orObj.getJSONObject("models").length())
+        assertEquals(128000, orObj.getJSONObject("models").getJSONObject("openai/gpt-4o").getJSONObject("limit").getInt("context"))
+
+        // Rotate key only
+        val rotated = helper.updateProviderApiKey(merged, "openrouter", "sk-or-v1-newkey4321")
+        val rotatedProviders = helper.parseConfiguredProviders(rotated)
+        assertEquals("••••4321", rotatedProviders.first { it.providerId == "openrouter" }.maskedApiKey)
+
+        // Delete openrouter — anthropic and theme stay intact, dangling default model cleared
+        val removed = helper.removeProvider(rotated, "openrouter")
+        val removedRoot = org.json.JSONObject(removed)
+        assertEquals("dark", removedRoot.getString("theme"))
+        assertTrue(removedRoot.getJSONObject("provider").has("anthropic"))
+        assertFalse(removedRoot.getJSONObject("provider").has("openrouter"))
+        assertFalse(removedRoot.has("model"))
+    }
+
+    @Test
+    fun `openai models list chat completion parser and curl config escaping work`() {
+        val helper = com.example.data.opencode.OpenCodeConfigHelper
+        val modelsJson = """
+            {
+              "object": "list",
+              "data": [
+                {"id": "gpt-4o-mini", "owned_by": "openai"},
+                {"id": "deepseek-chat", "owned_by": "deepseek"}
+              ]
+            }
+        """.trimIndent()
+        val models = helper.parseOpenAiModelsResponse(modelsJson)
+        assertEquals(2, models.size)
+        assertEquals("deepseek-chat", models[0].id)
+        assertEquals("deepseek-chat", models[0].displayName)
+        assertEquals("gpt-4o-mini", models[1].id)
+
+        val completionJson = """
+            {
+              "id": "chatcmpl-1",
+              "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "Готово"}}
+              ]
+            }
+        """.trimIndent()
+        assertEquals("Готово", helper.parseChatCompletionReply(completionJson))
+
+        val escaped = helper.escapeCurlConfigValue("""{"text":"a\"b\c"}""")
+        assertEquals("""{\"text\":\"a\\\"b\\c\"}""", escaped)
+    }
 }

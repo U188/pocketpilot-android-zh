@@ -71,6 +71,17 @@ class AppContainer(context: Context) {
     }
 
     val openCodeApiClient: OpenCodeApiClient by lazy {
-        OpenCodeApiClient(connectionManager = sshConnectionManager)
+        OpenCodeApiClient(
+            connectionManager = sshConnectionManager,
+            secretStore = secretStore,
+        )
+    }
+
+    val openCodeServerInstaller: com.example.data.opencode.OpenCodeServerInstaller by lazy {
+        com.example.data.opencode.OpenCodeServerInstaller(
+            connectionManager = sshConnectionManager,
+            sftpRepository = sftpRepository,
+            secretStore = secretStore,
+        )
     }
 }

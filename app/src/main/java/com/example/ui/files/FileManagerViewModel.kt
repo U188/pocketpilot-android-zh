@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 
 data class FileManagerUiState(
     val isConnected: Boolean = false,
+    val isReconnecting: Boolean = false,
     val homePath: String = "/",
     val currentPath: String = "/",
     val entries: List<RemoteFileEntry> = emptyList(),
@@ -122,9 +123,22 @@ class FileManagerViewModel(
                     is SshConnectionState.Connected -> {
                         val profileChanged = lastConnectedProfileId != state.profile.id
                         lastConnectedProfileId = state.profile.id
-                        _uiState.update { it.copy(isConnected = true) }
+                        _uiState.update { it.copy(isConnected = true, isReconnecting = false) }
                         if (profileChanged || _uiState.value.entries.isEmpty()) {
                             loadInitialDirectory()
+                        } else {
+                            // Reconnected to same server: preserve currentPath and silently refresh
+                            refresh()
+                        }
+                    }
+
+                    is SshConnectionState.Reconnecting -> {
+                        sftpRepository.closeCached()
+                        _uiState.update {
+                            it.copy(
+                                isReconnecting = true,
+                                isLoading = false,
+                            )
                         }
                     }
 
@@ -133,6 +147,7 @@ class FileManagerViewModel(
                         _uiState.update {
                             it.copy(
                                 isConnected = false,
+                                isReconnecting = false,
                                 isLoading = false,
                                 selectedPaths = emptySet(),
                             )

@@ -82,7 +82,9 @@ import com.example.R
 import com.example.domain.model.AttachedFileRef
 import com.example.domain.model.OpenCodeMessage
 import com.example.domain.model.OpenCodePart
+import com.example.domain.model.OpenCodeServerStatus
 import com.example.domain.model.OpenCodeSession
+import com.example.domain.model.SetupWizardStage
 import com.example.domain.model.SseConnectionStatus
 import com.example.ui.components.StatusChip
 import com.example.ui.theme.LocalStatusColors
@@ -119,7 +121,13 @@ fun ChatScreen(
         }
     }
 
-    if (!uiState.isConnected) {
+    LaunchedEffect(uiState.isConnected) {
+        if (uiState.isConnected) {
+            viewModel.onChatTabVisible()
+        }
+    }
+
+    if (!uiState.isConnected && !uiState.isReconnecting) {
         DisconnectedChatPane(
             onOpenServers = onOpenServers,
             modifier = modifier,
@@ -127,15 +135,99 @@ fun ChatScreen(
         return
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val isDualPane = maxWidth >= 840.dp
+    val showSetupView = uiState.isConnected && (
+        uiState.setup.serverStatus != OpenCodeServerStatus.RUNNING ||
+            uiState.setup.wizardStage != SetupWizardStage.IDLE
+        )
 
-            if (!isDualPane && uiState.activeSessionId != null) {
-                BackHandler { viewModel.closeActiveSession() }
+    if (showSetupView) {
+        if (uiState.setup.wizardStage != SetupWizardStage.IDLE && !uiState.setup.isRunningAction) {
+            BackHandler { viewModel.cancelSetupWizard() }
+        }
+        Box(modifier = modifier.fillMaxSize()) {
+            OpenCodeSetupView(
+                setupState = uiState.setup,
+                openCodePort = uiState.openCodePort,
+                onRecheck = { viewModel.checkOpenCodeServer(silentIfRunning = false) },
+                onOpenInstallPreview = { viewModel.openInstallPreview(forceUpdateBinary = false) },
+                onOpenUpdatePreview = { viewModel.openInstallPreview(forceUpdateBinary = true) },
+                onTogglePasswordAuth = viewModel::setEnablePasswordAuth,
+                onToggleVerifyPersistence = viewModel::setVerifyPersistenceOnRestart,
+                onConfirmInstall = { viewModel.confirmAndRunInstall(0) },
+                onCancelWizard = viewModel::cancelSetupWizard,
+                onRetryFailedStep = viewModel::retryFailedStep,
+                onStartServer = viewModel::startStoppedServer,
+                onRefreshConfiguredProviders = viewModel::loadConfiguredProviders,
+                onStartNewProvider = viewModel::startNewProviderEditor,
+                onEditConfiguredProvider = viewModel::startEditProvider,
+                onChangeProviderKey = viewModel::changeProviderApiKey,
+                onDeleteConfiguredProvider = viewModel::deleteConfiguredProvider,
+                onSelectCustomProvider = viewModel::onSelectCustomProvider,
+                onProviderNameChange = viewModel::onProviderNameChange,
+                onBaseUrlChange = viewModel::onBaseUrlChange,
+                onApiKeyChange = viewModel::onApiKeyChange,
+                onFetchModels = viewModel::fetchModelsFromProvider,
+                onModelSearchChange = viewModel::onModelSearchQueryChange,
+                onToggleModelSelection = viewModel::toggleModelSelection,
+                onUpdateModelDisplayName = viewModel::updateModelDisplayName,
+                onSelectDefaultModel = viewModel::selectDefaultModelInEditor,
+                onManualModelIdChange = viewModel::onManualModelIdInputChange,
+                onAddManualModel = viewModel::addManualModel,
+                onTestSelectedModel = viewModel::testSelectedModel,
+                onSaveCustomProvider = viewModel::saveCustomProviderAndFinish,
+                onFinishWithFreeModels = viewModel::finishWithFreeModels,
+                onLogCopied = {
+                    scope.launch {
+                        snackbarHostState.showSnackbar(context.getString(R.string.setup_log_copied))
+                    }
+                },
+            )
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
+        return
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (uiState.isReconnecting) {
+                Surface(
+                    color = LocalStatusColors.current.warning.copy(alpha = 0.16f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("chat_reconnecting_banner"),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = LocalStatusColors.current.warning,
+                        )
+                        Text(
+                            text = stringResource(R.string.reconnect_banner_chat),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
             }
 
-            Row(modifier = Modifier.fillMaxSize()) {
+            BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                val isDualPane = maxWidth >= 840.dp
+
+                if (!isDualPane && uiState.activeSessionId != null) {
+                    BackHandler { viewModel.closeActiveSession() }
+                }
+
+                Row(modifier = Modifier.fillMaxSize()) {
                 if (isDualPane || uiState.activeSessionId == null) {
                     SessionsListPane(
                         uiState = uiState,
@@ -213,6 +305,7 @@ fun ChatScreen(
                     )
                 }
             }
+        }
         }
 
         SnackbarHost(

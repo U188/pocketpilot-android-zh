@@ -38,6 +38,7 @@ data class PendingDangerousCommand(
 
 data class TerminalUiState(
     val isConnected: Boolean = false,
+    val isReconnecting: Boolean = false,
     val tabs: List<TerminalTabItem> = emptyList(),
     val activeTabId: String? = null,
     val ctrlArmed: Boolean = false,
@@ -83,12 +84,22 @@ class TerminalViewModel(
                         val hostKey = "${conn.profile.id}:${conn.connectedAtMillis}"
                         val isNewConnection = lastConnectedHostKey != hostKey
                         lastConnectedHostKey = hostKey
-                        _uiState.update { it.copy(isConnected = true) }
+                        _uiState.update { it.copy(isConnected = true, isReconnecting = false) }
                         if (isNewConnection) {
                             closeAllTabs()
-                            openNewTab()
+                            openNewTab(attachTmux = true)
                         } else if (sessions.isEmpty()) {
-                            openNewTab()
+                            openNewTab(attachTmux = true)
+                        }
+                    }
+
+                    is SshConnectionState.Reconnecting -> {
+                        _uiState.update {
+                            it.copy(
+                                isReconnecting = true,
+                                ctrlArmed = false,
+                                altArmed = false,
+                            )
                         }
                     }
 
@@ -98,6 +109,7 @@ class TerminalViewModel(
                         _uiState.update {
                             it.copy(
                                 isConnected = false,
+                                isReconnecting = false,
                                 ctrlArmed = false,
                                 altArmed = false,
                                 pendingDangerousCommand = null,
@@ -109,17 +121,18 @@ class TerminalViewModel(
         }
     }
 
-    fun openNewTab() {
+    fun openNewTab(attachTmux: Boolean = sessions.isEmpty()) {
         if (!_uiState.value.isConnected) return
         tabCounter++
         val id = UUID.randomUUID().toString()
-        val defaultTitle = "Shell $tabCounter"
+        val defaultTitle = if (attachTmux) "tmux: pocket" else "Shell $tabCounter"
         val session = SshTerminalSession(
             id = id,
             defaultTitle = defaultTitle,
             connectionManager = connectionManager,
             initialCols = lastViewportCols,
             initialRows = lastViewportRows,
+            attachTmuxSession = if (attachTmux) DEFAULT_TMUX_SESSION else null,
         )
         sessions[id] = session
 
@@ -369,5 +382,9 @@ class TerminalViewModel(
                 snippetRepository = snippetRepository,
             ) as T
         }
+    }
+
+    companion object {
+        const val DEFAULT_TMUX_SESSION = "pocket"
     }
 }

@@ -12,10 +12,15 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+data class OpenCodeServerAuth(
+    val username: String = "opencode",
+    val password: String,
+)
+
 /**
- * Stores SSH credentials encrypted with an AES-256-GCM key backed by Android Keystore.
- * Backed by a dedicated SharedPreferences file excluded from backup and device transfer.
- * Secrets are never logged.
+ * Stores SSH credentials and OpenCode server Basic Auth passwords encrypted with an AES-256-GCM key
+ * backed by Android Keystore. Backed by a dedicated SharedPreferences file excluded from backup
+ * and device transfer. Secrets are never logged.
  */
 class KeystoreSecretStore(context: Context) {
 
@@ -55,12 +60,48 @@ class KeystoreSecretStore(context: Context) {
 
     fun hasPassphrase(profileId: Long): Boolean = prefs.contains(passphraseKey(profileId))
 
+    fun saveOpenCodeServerAuth(
+        profileId: Long,
+        username: String?,
+        password: String?,
+    ) {
+        synchronized(lock) {
+            val editor = prefs.edit()
+            if (password.isNullOrEmpty()) {
+                editor.remove(openCodeUserKey(profileId))
+                editor.remove(openCodePassKey(profileId))
+            } else {
+                putOrRemove(editor, openCodeUserKey(profileId), username?.ifBlank { "opencode" } ?: "opencode")
+                putOrRemove(editor, openCodePassKey(profileId), password)
+            }
+            editor.apply()
+        }
+    }
+
+    fun getOpenCodeServerAuth(profileId: Long): OpenCodeServerAuth? = synchronized(lock) {
+        val pass = readDecrypted(openCodePassKey(profileId)) ?: return@synchronized null
+        if (pass.isEmpty()) return@synchronized null
+        val user = readDecrypted(openCodeUserKey(profileId))?.ifBlank { "opencode" } ?: "opencode"
+        OpenCodeServerAuth(username = user, password = pass)
+    }
+
+    fun clearOpenCodeServerAuth(profileId: Long) {
+        synchronized(lock) {
+            prefs.edit()
+                .remove(openCodeUserKey(profileId))
+                .remove(openCodePassKey(profileId))
+                .apply()
+        }
+    }
+
     fun deleteSecrets(profileId: Long) {
         synchronized(lock) {
             prefs.edit()
                 .remove(passwordKey(profileId))
                 .remove(privateKeyKey(profileId))
                 .remove(passphraseKey(profileId))
+                .remove(openCodeUserKey(profileId))
+                .remove(openCodePassKey(profileId))
                 .apply()
         }
     }
@@ -130,6 +171,8 @@ class KeystoreSecretStore(context: Context) {
     private fun passwordKey(profileId: Long) = "profile_${profileId}_password"
     private fun privateKeyKey(profileId: Long) = "profile_${profileId}_private_key"
     private fun passphraseKey(profileId: Long) = "profile_${profileId}_passphrase"
+    private fun openCodeUserKey(profileId: Long) = "profile_${profileId}_opencode_user"
+    private fun openCodePassKey(profileId: Long) = "profile_${profileId}_opencode_pass"
 
     companion object {
         const val PREFS_FILE_NAME = "opencode_secrets_vault"

@@ -327,6 +327,14 @@ fun WorkspaceScreen(
                             WorkspaceTab.SETTINGS -> SettingsScreen(
                                 viewModel = settingsViewModel,
                                 onManageServers = onOpenServers,
+                                onOpenConnectModel = {
+                                    chatViewModel.openConnectModelStage()
+                                    selectedTab = WorkspaceTab.CHAT
+                                },
+                                onRepairService = {
+                                    chatViewModel.openRepairInstallPreview()
+                                    selectedTab = WorkspaceTab.CHAT
+                                },
                             )
                         }
                     }

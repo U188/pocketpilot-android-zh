@@ -164,7 +164,7 @@ fun FileManagerScreen(
         }
     }
 
-    if (!uiState.isConnected) {
+    if (!uiState.isConnected && !uiState.isReconnecting) {
         DisconnectedFilesPane(
             onOpenServers = onOpenServers,
             modifier = modifier,
@@ -173,7 +173,21 @@ fun FileManagerScreen(
     }
 
     Box(modifier = modifier.fillMaxSize().imePadding()) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (uiState.isReconnecting) {
+                Surface(
+                    color = LocalStatusColors.current.warning.copy(alpha = 0.18f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = stringResource(R.string.reconnect_banner_files),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LocalStatusColors.current.warning,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
+            BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
             val isDualPane = maxWidth >= 840.dp
 
             Row(modifier = Modifier.fillMaxSize()) {
@@ -317,6 +331,7 @@ fun FileManagerScreen(
                     )
                 }
             }
+        }
         }
 
         SnackbarHost(

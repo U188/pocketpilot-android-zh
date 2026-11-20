@@ -30,6 +30,7 @@ class SshTerminalSession(
     private val connectionManager: SshConnectionManager,
     initialCols: Int = 80,
     initialRows: Int = 24,
+    private val attachTmuxSession: String? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val buffer = AnsiTerminalBuffer(initialCols = initialCols, initialRows = initialRows)
@@ -75,6 +76,17 @@ class SshTerminalSession(
                 shell = openedShell
                 outputStream = openedShell.outputStream
                 _status.value = TerminalTabStatus.CONNECTED
+
+                if (!attachTmuxSession.isNullOrBlank()) {
+                    val safeName = attachTmuxSession.filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+                    if (safeName.isNotEmpty()) {
+                        val tmuxCmd = " command -v tmux >/dev/null 2>&1 && exec tmux new -A -s $safeName\r"
+                        runCatching {
+                            openedShell.outputStream.write(tmuxCmd.toByteArray(StandardCharsets.UTF_8))
+                            openedShell.outputStream.flush()
+                        }
+                    }
+                }
 
                 val input = openedShell.inputStream
                 val rawBuf = ByteArray(4096)

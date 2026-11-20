@@ -53,6 +53,8 @@ fun OpenCodeNavHost(
             preferencesRepository = container.preferencesRepository,
             knownHostsRepository = container.knownHostsRepository,
             terminalSnippetRepository = container.terminalSnippetRepository,
+            connectionManager = container.sshConnectionManager,
+            serverInstaller = container.openCodeServerInstaller,
         ),
     )
 
@@ -72,6 +74,7 @@ fun OpenCodeNavHost(
             apiClient = container.openCodeApiClient,
             sftpRepository = container.sftpRepository,
             preferencesRepository = container.preferencesRepository,
+            serverInstaller = container.openCodeServerInstaller,
         ),
     )
 

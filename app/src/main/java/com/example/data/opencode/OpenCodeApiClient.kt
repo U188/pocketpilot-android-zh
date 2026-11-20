@@ -1,5 +1,6 @@
 package com.example.data.opencode
 
+import com.example.data.local.KeystoreSecretStore
 import com.example.data.ssh.SshConnectionManager
 import com.example.domain.model.AttachedFileRef
 import com.example.domain.model.OpenCodeAgent
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -34,6 +36,7 @@ import kotlin.math.min
 
 class OpenCodeApiClient(
     private val connectionManager: SshConnectionManager,
+    private val secretStore: KeystoreSecretStore? = null,
 ) {
     private val restClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -53,6 +56,21 @@ class OpenCodeApiClient(
 
     @Volatile
     private var discoveredPaths: DiscoveredOpenCodePaths = DiscoveredOpenCodePaths()
+
+    fun invalidateDiscoveryCache() {
+        discoveredPort = null
+    }
+
+    private fun buildBasicAuthHeader(): String? {
+        val profileId = connectionManager.getActiveProfileId() ?: return null
+        val auth = secretStore?.getOpenCodeServerAuth(profileId) ?: return null
+        return Credentials.basic(auth.username.ifBlank { "opencode" }, auth.password, StandardCharsets.UTF_8)
+    }
+
+    private fun Request.Builder.applyOpenCodeAuth(): Request.Builder {
+        buildBasicAuthHeader()?.let { header("Authorization", it) }
+        return this
+    }
 
     private fun requireBaseUrl(): Pair<Int, String> {
         val port = connectionManager.getActiveLocalTunnelPort()
@@ -289,6 +307,7 @@ class OpenCodeApiClient(
                 .url(url)
                 .header("Accept", "text/event-stream")
                 .header("Cache-Control", "no-cache")
+                .applyOpenCodeAuth()
                 .get()
                 .build()
 
@@ -345,6 +364,7 @@ class OpenCodeApiClient(
         val req = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
+            .applyOpenCodeAuth()
             .get()
             .build()
         return execute(req)
@@ -354,6 +374,7 @@ class OpenCodeApiClient(
         val req = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
+            .applyOpenCodeAuth()
             .delete()
             .build()
         return execute(req)
@@ -364,6 +385,7 @@ class OpenCodeApiClient(
         val req = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
+            .applyOpenCodeAuth()
             .method(method, body)
             .build()
         return execute(req)

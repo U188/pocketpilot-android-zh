@@ -349,7 +349,7 @@
     <!-- Stage 5: Foreground Service, Biometric Lock & Final Polish -->
     <string name="fgs_channel_name">SSH-соединение OpenCode</string>
     <string name="fgs_channel_desc">Постоянное уведомление для удержания SSH-туннеля, SFTP и терминала в фоне</string>
-    <string name="fgs_notif_title_connected">OpenCode: %1$s</string>
+    <string name="fgs_notif_title_connected">Подключено к %1$s</string>
     <string name="fgs_notif_text_connected">SSH и туннель 127.0.0.1:%1$d → :%2$d активны</string>
     <string name="fgs_notif_title_connecting">Подключение к %1$s…</string>
     <string name="fgs_notif_text_connecting">Устанавливается SSH-соединение и туннель</string>
@@ -392,4 +392,133 @@
     <string name="crash_copy_action">Копировать</string>
     <string name="crash_continue_action">Продолжить</string>
     <string name="crash_copied_toast">Текст ошибки скопирован в буфер обмена</string>
+
+    <!-- Block A: Background resilience & tmux -->
+    <string name="reconnect_banner_chat">Восстановление SSH и потока чата… Сессия и черновик сохранены</string>
+    <string name="reconnect_banner_files">Восстановление SSH… Текущая папка сохранена</string>
+    <string name="reconnect_banner_terminal">Переподключение SSH… При восстановлении откроется tmux-сессия pocket</string>
+
+    <!-- Block B: Turnkey OpenCode Installer & Model Setup -->
+    <string name="setup_checking_title">Проверка OpenCode на сервере…</string>
+    <string name="setup_checking_subtitle">Проверяем наличие бинарника и доступность порта %1$d на 127.0.0.1</string>
+    <string name="setup_not_installed_title">OpenCode не установлен</string>
+    <string name="setup_not_installed_desc">Установите и настройте OpenCode на сервере в один клик. Сервис будет слушать только 127.0.0.1:%1$d и работать через защищённый SSH-туннель.</string>
+    <string name="setup_install_button">Установить и настроить OpenCode</string>
+    <string name="setup_stopped_title">OpenCode установлен, но не запущен</string>
+    <string name="setup_stopped_desc">Бинарник найден (%1$s), но локальный сервер на порту %2$d не отвечает.</string>
+    <string name="setup_start_server_button">Запустить сервер</string>
+    <string name="setup_reinstall_button">Настроить автозапуск / переустановить</string>
+    <string name="setup_recheck_button">Проверить снова</string>
+
+    <string name="setup_preview_title">Команды для выполнения на сервере</string>
+    <string name="setup_preview_subtitle">Все шаги идемпотентны: повторный запуск безопасен. Порт %1$d открывается только на 127.0.0.1.</string>
+    <string name="setup_preview_confirm">Подтвердить и установить</string>
+    <string name="setup_installing_title">Установка и настройка OpenCode</string>
+    <string name="setup_step_pending">Ожидание</string>
+    <string name="setup_step_running">Выполняется…</string>
+    <string name="setup_step_success">Готово</string>
+    <string name="setup_step_error">Ошибка</string>
+    <string name="setup_live_log_toggle">Живой вывод команд</string>
+    <string name="setup_retry_step">Повторить шаг</string>
+    <string name="setup_copy_log">Копировать лог</string>
+    <string name="setup_log_copied">Лог скопирован (ключи и пароли скрыты)</string>
+
+    <string name="setup_model_title">Подключить модель</string>
+    <string name="setup_model_subtitle">OpenCode запущен на 127.0.0.1:%1$d. Выберите бесплатные модели OpenCode или подключите свой OpenAI-совместимый провайдер.</string>
+    <string name="setup_model_option_free">Бесплатные модели OpenCode</string>
+    <string name="setup_model_option_free_desc">Работает сразу без API-ключа (по умолчанию)</string>
+    <string name="setup_model_option_custom">Свой OpenAI-совместимый провайдер</string>
+    <string name="setup_model_option_custom_desc">OpenRouter, Groq, DeepSeek, Ollama, vLLM, LiteLLM и др.</string>
+    <string name="setup_model_baseurl_label">Base URL</string>
+    <string name="setup_model_baseurl_placeholder">https://api.openai.com/v1</string>
+    <string name="setup_model_apikey_label">API-ключ (хранится только на сервере)</string>
+    <string name="setup_model_id_label">ID модели</string>
+    <string name="setup_model_id_placeholder">gpt-4o-mini или deepseek-chat</string>
+    <string name="setup_model_display_name_label">Отображаемое имя модели</string>
+    <string name="setup_model_provider_name_label">Имя провайдера</string>
+    <string name="setup_model_test_button">Проверить</string>
+    <string name="setup_model_test_ok">Провайдер доступен (%1$s)</string>
+    <string name="setup_model_save_and_open">Сохранить на сервере и открыть чат</string>
+    <string name="setup_model_open_chat">Перейти в чат</string>
+    <string name="setup_model_security_note">API-ключ записывается напрямую в ~/.config/opencode/opencode.json на сервере по SFTP и не сохраняется в приложении или логах.</string>
+
+    <!-- Block B: Settings OpenCode Server Management -->
+    <string name="settings_section_opencode_server">Сервер OpenCode</string>
+    <string name="settings_opencode_disconnected">Подключитесь к серверу по SSH, чтобы управлять OpenCode</string>
+    <string name="settings_opencode_update">Обновить OpenCode</string>
+    <string name="settings_opencode_restart">Перезапустить</string>
+    <string name="settings_opencode_stop">Остановить</string>
+    <string name="settings_opencode_repair">Починить</string>
+    <string name="settings_opencode_remove">Удалить службу</string>
+    <string name="settings_opencode_remove_confirm_title">Удалить службу OpenCode?</string>
+    <string name="settings_opencode_remove_confirm_desc">Служба opencode-serve будет остановлена, отключена из автозапуска, а unit-файл и файл пароля будут удалены с сервера. Бинарник и ваши проекты останутся нетронутыми.</string>
+    <string name="settings_opencode_logs">Показать лог</string>
+    <string name="settings_opencode_logs_title">Лог службы opencode-serve</string>
+    <string name="settings_opencode_logs_empty">Лог пуст или служба ещё не запускалась.</string>
+    <string name="settings_opencode_connect_model">Подключить свою модель (OpenAI-совместимую)</string>
+    <string name="settings_opencode_status_label">Состояние службы</string>
+    <string name="settings_opencode_status_active">Работает</string>
+    <string name="settings_opencode_status_inactive">Остановлена</string>
+    <string name="settings_opencode_status_failed">Ошибка</string>
+    <string name="settings_opencode_status_missing">Не установлена</string>
+    <string name="settings_opencode_status_unknown">Неизвестно</string>
+    <string name="settings_opencode_version_label">Версия OpenCode</string>
+    <string name="settings_opencode_version_unknown">Не установлен</string>
+    <string name="settings_opencode_auth_badge">Basic Auth (Keystore)</string>
+
+    <!-- Turnkey persistent systemd installer additions -->
+    <string name="setup_option_password_title">Защита паролем (Basic Auth)</string>
+    <string name="setup_option_password_desc">Создаст случайный пароль в /etc/opencode-serve.env (права 600) и сохранит его в Android Keystore. В логи пароль не попадает.</string>
+    <string name="setup_option_persistence_title">Проверить, что переживёт закрытие</string>
+    <string name="setup_option_persistence_desc">Выполнит systemctl restart и убедится, что сервер снова отвечает. После перезагрузки VPS служба стартует сама.</string>
+    <string name="setup_reboot_autostart_note">Служба настроена как постоянный systemd unit с автозапуском: после закрытия SSH-сессии, терминала или перезагрузки VPS сервер OpenCode поднимется сам.</string>
+    <string name="setup_already_installed_update">Обновить OpenCode</string>
+    <string name="setup_configure_service_button">Настроить постоянную службу</string>
+    <string name="setup_transient_warning">Обнаружена временная служба (transient) или ручной запуск — она пропадёт после перезагрузки. Нажмите ниже, чтобы перевести на постоянный systemd unit.</string>
+    <string name="setup_verify_card_title">Результаты автопроверки</string>
+    <string name="setup_verify_service_label">Служба systemd active</string>
+    <string name="setup_verify_port_label">Порт 127.0.0.1:%1$d слушается (ss -ltn)</string>
+    <string name="setup_verify_session_label">Ответ GET /session (JSON)</string>
+    <string name="setup_verify_restart_label">Пережил systemctl restart</string>
+
+    <!-- Upgraded Connect Model / Custom Providers Screen -->
+    <string name="model_screen_title">Подключить свою модель</string>
+    <string name="model_providers_section_title">Подключённые провайдеры</string>
+    <string name="model_providers_loading">Загрузка провайдеров с сервера…</string>
+    <string name="model_providers_empty">Подключённых кастомных провайдеров пока нет. Добавьте OpenAI-совместимый провайдер ниже.</string>
+    <string name="model_providers_add_new">Новый провайдер</string>
+    <string name="model_provider_default_badge">По умолчанию</string>
+    <string name="model_provider_no_key">Без ключа</string>
+    <string name="model_provider_key_label">Ключ: %1$s</string>
+    <string name="model_provider_models_count">Моделей: %1$d</string>
+    <string name="model_provider_action_edit">Редактировать</string>
+    <string name="model_provider_action_change_key">Сменить ключ</string>
+    <string name="model_provider_action_delete">Удалить</string>
+    <string name="model_editor_new_title">Новый провайдер</string>
+    <string name="model_editor_edit_title">Редактирование: %1$s</string>
+    <string name="model_editor_apikey_keep_hint">Текущий ключ %1$s — оставьте пустым, чтобы не менять</string>
+    <string name="model_fetch_button">Загрузить модели</string>
+    <string name="model_fetch_loading">Загрузка списка моделей с сервера…</string>
+    <string name="model_fetch_loaded_summary">Загружено моделей: %1$d (выбрано: %2$d)</string>
+    <string name="model_search_placeholder">Поиск моделей по ID или имени…</string>
+    <string name="model_search_empty">По запросу модели не найдены</string>
+    <string name="model_selected_section_title">Выбранные модели (%1$d)</string>
+    <string name="model_selected_hint">Нажмите на звезду, чтобы выбрать модель по умолчанию для чата. Отображаемое имя можно изменить.</string>
+    <string name="model_display_name_inline_label">Отображаемое имя</string>
+    <string name="model_make_default">Сделать основной</string>
+    <string name="model_manual_add_label">Добавить ID модели вручную</string>
+    <string name="model_manual_add_button">Добавить</string>
+    <string name="model_test_button">Проверить модель</string>
+    <string name="model_test_running">Отправка «ответь одним словом» с сервера…</string>
+    <string name="model_test_target_label">Проверка модели: %1$s</string>
+    <string name="model_test_success_title">Ответ модели (HTTP %1$d)</string>
+    <string name="model_test_error_title">Ошибка проверки модели</string>
+    <string name="model_test_error_http_title">Ошибка HTTP %1$d</string>
+    <string name="model_save_and_select_button">Сохранить и выбрать в чате</string>
+    <string name="model_saving_progress">Проверка доступа, сохранение и перезапуск службы…</string>
+    <string name="model_change_key_dialog_title">Сменить API-ключ</string>
+    <string name="model_change_key_dialog_desc">Новый ключ для провайдера «%1$s» будет записан напрямую в ~/.config/opencode/opencode.json (chmod 600) и не сохранится в приложении.</string>
+    <string name="model_change_key_input_label">Новый API-ключ</string>
+    <string name="model_delete_dialog_title">Удалить провайдер?</string>
+    <string name="model_delete_dialog_desc">Провайдер «%1$s» (%2$s) будет удалён из ~/.config/opencode/opencode.json, а служба opencode-serve перезапущена. Остальные провайдеры и настройки останутся без изменений.</string>
 </resources>
