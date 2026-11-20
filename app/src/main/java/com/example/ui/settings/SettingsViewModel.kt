@@ -9,6 +9,8 @@ import com.example.data.opencode.OpenCodeServerInstaller
 import com.example.data.repository.KnownHostsRepository
 import com.example.data.repository.TerminalSnippetRepository
 import com.example.data.ssh.SshConnectionManager
+import com.example.data.update.AppUpdateManager
+import com.example.data.update.AppUpdateUiState
 import com.example.domain.model.AppSettings
 import com.example.domain.model.KnownHost
 import com.example.domain.model.SshConnectionState
@@ -46,6 +48,7 @@ data class SettingsUiState(
     val isSshConnected: Boolean = false,
     val activeServerName: String = "",
     val serverAdmin: ServerAdminState = ServerAdminState(),
+    val appUpdate: AppUpdateUiState = AppUpdateUiState(),
 )
 
 class SettingsViewModel(
@@ -54,6 +57,7 @@ class SettingsViewModel(
     private val terminalSnippetRepository: TerminalSnippetRepository,
     private val connectionManager: SshConnectionManager,
     private val serverInstaller: OpenCodeServerInstaller,
+    private val appUpdateManager: AppUpdateManager,
 ) : ViewModel() {
 
     private val serverAdminFlow = MutableStateFlow(ServerAdminState())
@@ -64,7 +68,7 @@ class SettingsViewModel(
         }
     }
 
-    val uiState: StateFlow<SettingsUiState> = combine(
+    private val coreStateFlow = combine(
         preferencesRepository.settings,
         knownHostsRepository.knownHosts,
         terminalSnippetRepository.snippets,
@@ -80,6 +84,13 @@ class SettingsViewModel(
             activeServerName = connected?.profile?.name.orEmpty(),
             serverAdmin = admin,
         )
+    }
+
+    val uiState: StateFlow<SettingsUiState> = combine(
+        coreStateFlow,
+        appUpdateManager.state,
+    ) { core, updateState ->
+        core.copy(appUpdate = updateState)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -138,6 +149,22 @@ class SettingsViewModel(
         viewModelScope.launch {
             preferencesRepository.setSecureScreenEnabled(enabled)
         }
+    }
+
+    fun setAutoCheckUpdates(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setAutoCheckUpdates(enabled)
+        }
+    }
+
+    fun checkForUpdatesManual() {
+        viewModelScope.launch {
+            appUpdateManager.checkForUpdates(force = true)
+        }
+    }
+
+    fun openAvailableUpdateDialog() {
+        appUpdateManager.openUpdateDialog()
     }
 
     fun saveSnippet(snippet: TerminalSnippet) {
@@ -386,6 +413,7 @@ class SettingsViewModel(
         private val terminalSnippetRepository: TerminalSnippetRepository,
         private val connectionManager: SshConnectionManager,
         private val serverInstaller: OpenCodeServerInstaller,
+        private val appUpdateManager: AppUpdateManager,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -395,6 +423,7 @@ class SettingsViewModel(
                 terminalSnippetRepository = terminalSnippetRepository,
                 connectionManager = connectionManager,
                 serverInstaller = serverInstaller,
+                appUpdateManager = appUpdateManager,
             ) as T
         }
     }

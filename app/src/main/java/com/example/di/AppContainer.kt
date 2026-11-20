@@ -14,6 +14,7 @@ import com.example.data.sftp.SftpRepository
 import com.example.data.sftp.TransferQueueManager
 import com.example.data.ssh.SshConnectionManager
 import com.example.data.ssh.SshKeyGenerator
+import com.example.data.update.AppUpdateManager
 import com.example.service.SshForegroundServiceController
 
 class AppContainer(context: Context) {
@@ -82,6 +83,13 @@ class AppContainer(context: Context) {
             connectionManager = sshConnectionManager,
             sftpRepository = sftpRepository,
             secretStore = secretStore,
+        )
+    }
+
+    val appUpdateManager: AppUpdateManager by lazy {
+        AppUpdateManager(
+            context = appContext,
+            preferencesRepository = preferencesRepository,
         )
     }
 }

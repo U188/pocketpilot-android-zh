@@ -22,4 +22,6 @@ data class AppSettings(
     val secureScreenEnabled: Boolean = false,
     val lastChatSessionId: String? = null,
     val lastChatDraft: String = "",
+    val autoCheckUpdates: Boolean = true,
+    val lastUpdateCheckEpochMs: Long = 0L,
 )

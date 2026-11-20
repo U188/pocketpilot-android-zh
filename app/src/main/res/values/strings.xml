@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">OpenCode</string>
+    <string name="app_name">PocketPilot</string>
 
     <!-- Navigation -->
     <string name="nav_chat">Чат</string>
@@ -377,10 +377,10 @@
     <string name="settings_privacy_badge_title">Приватный клиент без телеметрии</string>
     <string name="settings_privacy_badge_subtitle">Весь сетевой трафик идёт напрямую к вашему серверу по SSH. Секреты зашифрованы в Android Keystore и исключены из резервных копий.</string>
 
-    <string name="biometric_prompt_title">Разблокировка OpenCode</string>
+    <string name="biometric_prompt_title">Разблокировка PocketPilot</string>
     <string name="biometric_prompt_subtitle">Подтвердите личность для доступа к SSH-профилям и сессиям</string>
     <string name="biometric_enable_prompt_subtitle">Подтвердите биометрию или PIN, чтобы включить блокировку приложения</string>
-    <string name="biometric_lock_screen_title">OpenCode заблокирован</string>
+    <string name="biometric_lock_screen_title">PocketPilot заблокирован</string>
     <string name="biometric_lock_screen_subtitle">SSH-ключи, терминал и сессии защищены</string>
     <string name="biometric_unlock_button">Разблокировать</string>
     <string name="biometric_auth_failed">Не удалось подтвердить личность. Попробуйте ещё раз.</string>
@@ -521,4 +521,35 @@
     <string name="model_change_key_input_label">Новый API-ключ</string>
     <string name="model_delete_dialog_title">Удалить провайдер?</string>
     <string name="model_delete_dialog_desc">Провайдер «%1$s» (%2$s) будет удалён из ~/.config/opencode/opencode.json, а служба opencode-serve перезапущена. Остальные провайдеры и настройки останутся без изменений.</string>
+
+    <!-- App Updates (GitHub Releases) -->
+    <string name="settings_section_updates">Обновления приложения</string>
+    <string name="settings_updates_current_version">Текущая версия: %1$s (сборка %2$d)</string>
+    <string name="settings_updates_last_checked">Последняя проверка: %1$s</string>
+    <string name="settings_updates_never_checked">Ещё не проверялось</string>
+    <string name="settings_updates_auto_check_title">Автопроверка обновлений</string>
+    <string name="settings_updates_auto_check_subtitle">Проверять GitHub Releases при запуске (не чаще раза в 6 часов)</string>
+    <string name="settings_updates_check_button">Проверить обновления</string>
+    <string name="settings_updates_checking">Проверка обновлений…</string>
+    <string name="settings_updates_up_to_date">Установлена актуальная версия (%1$s)</string>
+    <string name="settings_updates_available_banner">Доступна версия %1$s</string>
+    <string name="settings_updates_open_dialog_button">Показать обновление</string>
+
+    <string name="update_dialog_title">Доступна версия %1$s</string>
+    <string name="update_dialog_version_compare">Текущая: %1$s (#%2$d) → Новая: %3$s (#%4$d)</string>
+    <string name="update_dialog_notes_label">Описание релиза</string>
+    <string name="update_dialog_notes_empty">Описание изменений не указано.</string>
+    <string name="update_dialog_action_update">Обновить</string>
+    <string name="update_dialog_action_install">Установить</string>
+    <string name="update_dialog_action_retry">Повторить загрузку</string>
+    <string name="update_dialog_action_cancel_download">Отменить загрузку</string>
+    <string name="update_dialog_action_later">Позже</string>
+    <string name="update_dialog_downloading_progress">Загрузка %1$s из %2$s (%3$d%%)</string>
+    <string name="update_dialog_downloading_indeterminate">Загрузка %1$s…</string>
+    <string name="update_dialog_downloaded_ready">Файл обновления загружен (%1$s) и готов к установке.</string>
+    <string name="update_dialog_download_cancelled">Загрузка отменена.</string>
+    <string name="update_dialog_unknown_sources_title">Требуется разрешение на установку</string>
+    <string name="update_dialog_unknown_sources_desc">Чтобы установить обновление PocketPilot, включите «Установка из этого источника» в системных настройках. После возврата установка запустится автоматически.</string>
+    <string name="update_dialog_open_settings">Открыть настройки</string>
+    <string name="update_dialog_install_error">Не удалось запустить системный установщик APK</string>
 </resources>

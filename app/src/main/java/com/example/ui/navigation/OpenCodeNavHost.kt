@@ -55,6 +55,7 @@ fun OpenCodeNavHost(
             terminalSnippetRepository = container.terminalSnippetRepository,
             connectionManager = container.sshConnectionManager,
             serverInstaller = container.openCodeServerInstaller,
+            appUpdateManager = container.appUpdateManager,
         ),
     )
 

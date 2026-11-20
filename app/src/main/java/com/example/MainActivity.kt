@@ -31,6 +31,7 @@ import com.example.crash.CrashReporter
 import com.example.domain.model.AppSettings
 import com.example.domain.model.SshConnectionState
 import com.example.security.BiometricAuthHelper
+import com.example.ui.components.AppUpdateDialog
 import com.example.ui.crash.CrashReportScreen
 import com.example.ui.navigation.OpenCodeNavHost
 import com.example.ui.security.BiometricLockScreen
@@ -49,6 +50,8 @@ class MainActivity : FragmentActivity() {
             val settings by container.preferencesRepository.settings
                 .collectAsStateWithLifecycle(initialValue = AppSettings())
             val connectionState by container.sshConnectionManager.connectionState
+                .collectAsStateWithLifecycle()
+            val updateState by container.appUpdateManager.state
                 .collectAsStateWithLifecycle()
 
             var pendingCrash by remember {
@@ -83,6 +86,13 @@ class MainActivity : FragmentActivity() {
                     }
                 } else if (!settings.biometricLockEnabled) {
                     isLocked = false
+                }
+            }
+
+            // Check GitHub Releases on startup (throttled to once every 6 hours, respects toggle)
+            LaunchedEffect(pendingCrash) {
+                if (pendingCrash == null) {
+                    container.appUpdateManager.checkForUpdates(force = false)
                 }
             }
 
@@ -182,6 +192,15 @@ class MainActivity : FragmentActivity() {
                                 BiometricLockScreen(
                                     errorMessage = authErrorMessage,
                                     onUnlockClick = triggerBiometricPrompt,
+                                )
+                            } else if (updateState.showUpdateDialog && updateState.availableRelease != null) {
+                                val release = updateState.availableRelease!!
+                                AppUpdateDialog(
+                                    release = release,
+                                    downloadState = updateState.downloadState,
+                                    onStartDownload = { container.appUpdateManager.startDownload(release) },
+                                    onCancelDownload = container.appUpdateManager::cancelDownload,
+                                    onDismiss = container.appUpdateManager::dismissUpdateDialog,
                                 )
                             }
                         }

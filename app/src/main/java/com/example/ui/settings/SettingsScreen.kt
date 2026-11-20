@@ -42,6 +42,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.NewReleases
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PrivacyTip
@@ -51,6 +52,7 @@ import androidx.compose.material.icons.rounded.ScreenshotMonitor
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.StopCircle
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.AlertDialog
@@ -88,10 +90,14 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
 import com.example.R
 import com.example.domain.model.SystemdServiceState
 import com.example.domain.model.TerminalSnippet
 import com.example.domain.model.ThemeMode
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.example.security.BiometricAuthHelper
 import com.example.ui.components.StatusChip
 import com.example.ui.terminal.SnippetEditorDialog
@@ -896,6 +902,152 @@ fun SettingsScreen(
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item(key = "app_updates_section") {
+                val updateState = uiState.appUpdate
+                val lastCheckedFormatted = remember(uiState.settings.lastUpdateCheckEpochMs) {
+                    val ts = uiState.settings.lastUpdateCheckEpochMs
+                    if (ts <= 0L) {
+                        null
+                    } else {
+                        SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(ts))
+                    }
+                }
+
+                SettingsCard(title = stringResource(R.string.settings_section_updates)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.SystemUpdate,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    R.string.settings_updates_current_version,
+                                    BuildConfig.VERSION_NAME,
+                                    BuildConfig.VERSION_CODE,
+                                ),
+                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = MonoFontFamily),
+                                modifier = Modifier.testTag("settings_updates_version_text"),
+                            )
+                            Text(
+                                text = stringResource(
+                                    R.string.settings_updates_last_checked,
+                                    lastCheckedFormatted
+                                        ?: stringResource(R.string.settings_updates_never_checked),
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.testTag("settings_updates_last_checked_text"),
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.settings_updates_auto_check_title),
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_updates_auto_check_subtitle),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = uiState.settings.autoCheckUpdates,
+                            onCheckedChange = viewModel::setAutoCheckUpdates,
+                            modifier = Modifier.testTag("settings_updates_auto_check_switch"),
+                        )
+                    }
+
+                    updateState.statusMessage?.let { statusText ->
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = when {
+                                updateState.isError -> MaterialTheme.colorScheme.error
+                                updateState.availableRelease != null -> MaterialTheme.colorScheme.primary
+                                else -> LocalStatusColors.current.connected
+                            },
+                            modifier = Modifier.testTag("settings_updates_status_text"),
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilledTonalButton(
+                            onClick = viewModel::checkForUpdatesManual,
+                            enabled = !updateState.isChecking,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("settings_updates_check_button"),
+                        ) {
+                            if (updateState.isChecking) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = stringResource(R.string.settings_updates_checking),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.settings_updates_check_button),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+
+                        if (updateState.availableRelease != null) {
+                            OutlinedButton(
+                                onClick = viewModel::openAvailableUpdateDialog,
+                                modifier = Modifier.testTag("settings_updates_open_dialog_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.NewReleases,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.settings_updates_open_dialog_button),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
                         }
                     }

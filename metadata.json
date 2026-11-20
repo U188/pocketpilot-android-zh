@@ -1,5 +1,5 @@
 {
-  "name": "OpenCode",
+  "name": "PocketPilot",
   "description": "Мобильный SSH/SFTP клиент и рабочее пространство для OpenCode: профили серверов, SSH-туннель, чат с агентом, файловый менеджер и терминал.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

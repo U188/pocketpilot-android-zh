@@ -46,7 +46,7 @@ class ExampleRobolectricTest {
     fun `read app name from context`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("OpenCode", appName)
+        assertEquals("PocketPilot", appName)
     }
 
     @Test
@@ -603,5 +603,82 @@ class ExampleRobolectricTest {
 
         val escaped = helper.escapeCurlConfigValue("""{"text":"a\"b\c"}""")
         assertEquals("""{\"text\":\"a\\\"b\\c\"}""", escaped)
+    }
+
+    @Test
+    fun `github release update checker parses tag build number asset url throttle and errors`() {
+        assertEquals(15, com.example.data.update.AppUpdateManager.parseBuildNumberFromTag("v1.0.15"))
+        assertEquals(42, com.example.data.update.AppUpdateManager.parseBuildNumberFromTag("1.2.42"))
+        assertEquals(null, com.example.data.update.AppUpdateManager.parseBuildNumberFromTag("latest"))
+        assertEquals("1.0.15", com.example.data.update.AppUpdateManager.formatDisplayVersion("v1.0.15", 15))
+
+        val releaseJson = """
+            {
+              "tag_name": "v1.0.15",
+              "name": "PocketPilot 1.0.15",
+              "body": "Исправлены ошибки SSH и добавлена проверка обновлений.",
+              "html_url": "https://github.com/renderr03/OPENCODE-APK-FOR-ANDROID-WITH-AI/releases/tag/v1.0.15",
+              "assets": [
+                {
+                  "name": "checksums.txt",
+                  "browser_download_url": "https://example.com/checksums.txt"
+                },
+                {
+                  "name": "app-debug.apk",
+                  "browser_download_url": "https://github.com/renderr03/OPENCODE-APK-FOR-ANDROID-WITH-AI/releases/download/v1.0.15/app-debug.apk"
+                }
+              ]
+            }
+        """.trimIndent()
+        val release = com.example.data.update.AppUpdateManager.parseLatestReleaseJson(releaseJson)
+        assertEquals("v1.0.15", release.tagName)
+        assertEquals("1.0.15", release.displayVersion)
+        assertEquals(15, release.buildNumber)
+        assertEquals("app-debug.apk", release.apkAssetName)
+        assertTrue(release.apkDownloadUrl!!.endsWith("/app-debug.apk"))
+        assertTrue(com.example.data.update.AppUpdateManager.isUpdateAvailable(release, currentVersionCode = 14))
+        assertFalse(com.example.data.update.AppUpdateManager.isUpdateAvailable(release, currentVersionCode = 15))
+
+        val sixHours = com.example.data.update.AppUpdateManager.AUTO_CHECK_INTERVAL_MS
+        assertTrue(com.example.data.update.AppUpdateManager.shouldAutoCheck(true, 0L, 1_000L))
+        assertFalse(com.example.data.update.AppUpdateManager.shouldAutoCheck(false, 0L, 1_000L))
+        assertFalse(com.example.data.update.AppUpdateManager.shouldAutoCheck(true, 10_000L, 10_000L + sixHours - 1L))
+        assertTrue(com.example.data.update.AppUpdateManager.shouldAutoCheck(true, 10_000L, 10_000L + sixHours))
+
+        assertTrue(com.example.data.update.AppUpdateManager.mapHttpErrorToMessage(404).contains("404"))
+        assertTrue(
+            com.example.data.update.AppUpdateManager.mapHttpErrorToMessage(403, rateLimitRemaining = "0")
+                .contains("лимит", ignoreCase = true),
+        )
+        assertTrue(
+            com.example.data.update.AppUpdateManager.mapHttpErrorToMessage(429)
+                .contains("лимит", ignoreCase = true),
+        )
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val unknownSourcesIntent = com.example.data.update.AppUpdateManager.buildUnknownSourcesSettingsIntent(context)
+        assertEquals(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, unknownSourcesIntent.action)
+        assertEquals("package:${context.packageName}", unknownSourcesIntent.dataString)
+
+        val updatesDir = java.io.File(context.filesDir, com.example.data.update.AppUpdateManager.UPDATES_DIR_NAME)
+        updatesDir.mkdirs()
+        val fakeApk = java.io.File(updatesDir, "test-update.apk")
+        fakeApk.writeBytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04, 0x00, 0x00))
+        assertTrue(com.example.data.update.AppUpdateManager.isValidApkMagic(fakeApk))
+
+        val installIntent = com.example.data.update.AppUpdateManager.buildInstallApkIntent(context, fakeApk)
+        assertEquals(android.content.Intent.ACTION_VIEW, installIntent.action)
+        assertEquals("application/vnd.android.package-archive", installIntent.type)
+        assertTrue(installIntent.data.toString().startsWith("content://${context.packageName}.fileprovider/"))
+        assertTrue((installIntent.flags and android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0)
+        fakeApk.delete()
+
+        val badApk = java.io.File(updatesDir, "bad.apk")
+        badApk.writeText("<html>not an apk</html>")
+        assertFalse(com.example.data.update.AppUpdateManager.isValidApkMagic(badApk))
+        badApk.delete()
+
+        assertEquals("512 Б", com.example.data.update.AppUpdateManager.formatBytes(512L))
+        assertEquals("1.5 МБ", com.example.data.update.AppUpdateManager.formatBytes((1.5 * 1024 * 1024).toLong()))
     }
 }

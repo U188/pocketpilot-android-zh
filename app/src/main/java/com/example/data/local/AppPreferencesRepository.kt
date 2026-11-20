@@ -43,6 +43,8 @@ class AppPreferencesRepository(context: Context) {
             secureScreenEnabled = prefs[KEY_SECURE_SCREEN] ?: false,
             lastChatSessionId = prefs[KEY_LAST_CHAT_SESSION_ID],
             lastChatDraft = prefs[KEY_LAST_CHAT_DRAFT].orEmpty(),
+            autoCheckUpdates = prefs[KEY_AUTO_CHECK_UPDATES] ?: true,
+            lastUpdateCheckEpochMs = prefs[KEY_LAST_UPDATE_CHECK_MS] ?: 0L,
         )
     }
 
@@ -119,6 +121,14 @@ class AppPreferencesRepository(context: Context) {
         dataStore.edit { it[KEY_LAST_CHAT_DRAFT] = draft }
     }
 
+    suspend fun setAutoCheckUpdates(enabled: Boolean) {
+        dataStore.edit { it[KEY_AUTO_CHECK_UPDATES] = enabled }
+    }
+
+    suspend fun setLastUpdateCheckEpochMs(epochMs: Long) {
+        dataStore.edit { it[KEY_LAST_UPDATE_CHECK_MS] = epochMs.coerceAtLeast(0L) }
+    }
+
     companion object {
         private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
         private val KEY_DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
@@ -135,5 +145,7 @@ class AppPreferencesRepository(context: Context) {
         private val KEY_SECURE_SCREEN = booleanPreferencesKey("secure_screen")
         private val KEY_LAST_CHAT_SESSION_ID = stringPreferencesKey("last_chat_session_id")
         private val KEY_LAST_CHAT_DRAFT = stringPreferencesKey("last_chat_draft")
+        private val KEY_AUTO_CHECK_UPDATES = booleanPreferencesKey("auto_check_updates")
+        private val KEY_LAST_UPDATE_CHECK_MS = longPreferencesKey("last_update_check_ms")
     }
 }
