@@ -1,0 +1,66 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Find project root (unpack project.zip if present)
+        run: |
+          if [ -f project.zip ]; then
+            mkdir -p app_src
+            unzip -q -o project.zip -d app_src
+          fi
+          SETTINGS=$(find . -maxdepth 4 -name 'settings.gradle*' -not -path './.git/*' | awk '{print length, $0}' | sort -n | head -n1 | cut -d' ' -f2-)
+          if [ -z "$SETTINGS" ]; then echo "settings.gradle not found"; exit 1; fi
+          echo "ROOT=$(dirname "$SETTINGS")" >> "$GITHUB_ENV"
+
+      - name: Accept Android licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Build debug APK
+        run: |
+          cd "$ROOT"
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew assembleDebug --stacktrace
+          else
+            V=$(grep -h distributionUrl gradle/wrapper/gradle-wrapper.properties 2>/dev/null | sed -E 's/.*gradle-([0-9.]+)-.*/\1/')
+            V=${V:-8.13}
+            echo "Using Gradle $V"
+            curl -sSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-$V-bin.zip"
+            unzip -q /tmp/gradle.zip -d /tmp
+            /tmp/gradle-$V/bin/gradle assembleDebug --stacktrace
+          fi
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          find "$ROOT" -path '*build/outputs/apk/debug/*.apk' -exec cp {} out/app-debug.apk \;
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: out/app-debug.apk
+
+      - name: Publish as release (direct APK download)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest -y --cleanup-tag || true
+          gh release create latest out/app-debug.apk --title "Latest APK" --notes "Debug build"
