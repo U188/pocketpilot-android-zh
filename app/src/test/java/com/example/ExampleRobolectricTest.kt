@@ -779,4 +779,19 @@ class ExampleRobolectricTest {
         assertTrue(copied.contains("Привет, мир"))
         assertTrue(copied.contains("Ошибка: Предупреждение"))
     }
+
+    @Test
+    fun `main activity result registry launches unknown sources settings without 16-bit requestCode crash`() {
+        val activity = composeRule.activity
+        val launcher = activity.activityResultRegistry.register(
+            "test_unknown_sources_launcher",
+            androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+        ) { /* no-op */ }
+        try {
+            val intent = com.example.data.update.AppUpdateManager.buildUnknownSourcesSettingsIntent(activity)
+            launcher.launch(intent)
+        } finally {
+            launcher.unregister()
+        }
+    }
 }

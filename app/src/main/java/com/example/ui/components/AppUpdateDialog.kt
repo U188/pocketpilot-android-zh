@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -30,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +43,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.BuildConfig
 import com.example.R
 import com.example.data.update.ApkDownloadState
@@ -82,9 +87,12 @@ fun AppUpdateDialog(
         }
     }
 
+    var waitingForUnknownSourcesReturn by remember(release.buildNumber) { mutableStateOf(false) }
+
     val unknownSourcesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
     ) {
+        waitingForUnknownSourcesReturn = false
         val granted = AppUpdateManager.canRequestPackageInstalls(context)
         needsUnknownSourcesPermission = !granted
         if (granted) {
@@ -93,6 +101,27 @@ fun AppUpdateDialog(
                 launchInstaller(readyFile)
             }
         }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, downloadState, needsUnknownSourcesPermission, waitingForUnknownSourcesReturn) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME &&
+                (needsUnknownSourcesPermission || waitingForUnknownSourcesReturn)
+            ) {
+                val granted = AppUpdateManager.canRequestPackageInstalls(context)
+                if (granted) {
+                    waitingForUnknownSourcesReturn = false
+                    needsUnknownSourcesPermission = false
+                    val readyFile = (downloadState as? ApkDownloadState.Downloaded)?.apkFile
+                    if (readyFile != null && readyFile.exists()) {
+                        launchInstaller(readyFile)
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Automatically launch system installer (or show unknown-sources prompt) as soon as APK finishes downloading
@@ -311,11 +340,16 @@ fun AppUpdateDialog(
                 downloadState is ApkDownloadState.Downloaded && needsUnknownSourcesPermission -> {
                     FilledTonalButton(
                         onClick = {
+                            installError = null
+                            waitingForUnknownSourcesReturn = true
+                            val settingsIntent = AppUpdateManager.buildUnknownSourcesSettingsIntent(context)
                             runCatching {
-                                unknownSourcesLauncher.launch(
-                                    AppUpdateManager.buildUnknownSourcesSettingsIntent(context),
-                                )
+                                unknownSourcesLauncher.launch(settingsIntent)
+                            }.recoverCatching {
+                                settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                context.startActivity(settingsIntent)
                             }.onFailure { err ->
+                                waitingForUnknownSourcesReturn = false
                                 installError = err.localizedMessage ?: installErrorText
                             }
                         },

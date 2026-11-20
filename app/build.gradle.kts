@@ -151,6 +151,7 @@ dependencies {
   implementation(libs.eddsa)
   implementation(libs.slf4j.nop)
   implementation(libs.androidx.biometric)
+  implementation(libs.androidx.fragment.ktx)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
