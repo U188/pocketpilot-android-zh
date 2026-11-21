@@ -396,8 +396,8 @@ class AppUpdateManager(
     class GitHubUpdateException(message: String) : Exception(message)
 
     companion object {
-        const val REPO_OWNER = "renderr03"
-        const val REPO_NAME = "OPENCODE-APK-FOR-ANDROID-WITH-AI"
+        const val REPO_OWNER = "U188"
+        const val REPO_NAME = "pocketpilot-android-zh"
         const val TARGET_APK_NAME = "app-debug.apk"
         const val UPDATES_DIR_NAME = "updates"
         const val LATEST_RELEASE_URL =

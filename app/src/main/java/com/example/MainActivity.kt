@@ -1,11 +1,14 @@
 package com.example
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.WindowManager
+import java.util.Locale
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -38,6 +41,13 @@ import com.example.ui.security.BiometricLockScreen
 import com.example.ui.theme.OpenCodeTheme
 
 class MainActivity : FragmentActivity() {
+
+    override fun attachBaseContext(newBase: Context) {
+        val configuration = Configuration(newBase.resources.configuration).apply {
+            setLocale(Locale.SIMPLIFIED_CHINESE)
+        }
+        super.attachBaseContext(newBase.createConfigurationContext(configuration))
+    }
 
     private var lastBackgroundedElapsedMs: Long = 0L
 
@@ -89,12 +99,6 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Check GitHub Releases on startup (throttled to once every 6 hours, respects toggle)
-            LaunchedEffect(pendingCrash) {
-                if (pendingCrash == null) {
-                    container.appUpdateManager.checkForUpdates(force = false)
-                }
-            }
 
             // Request POST_NOTIFICATIONS once on Android 13+ after SSH connects with keep-alive enabled
             LaunchedEffect(connectionState, settings.keepAliveInBackground) {
