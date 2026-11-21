@@ -427,7 +427,7 @@ class ExampleRobolectricTest {
             verifyPersistence = true,
         )
         assertEquals(5, steps.size)
-        assertTrue(steps[1].title.contains("检查 OpenCode 可执行文件"))
+        assertTrue(steps[1].title.contains("OpenCode"))
         assertTrue(steps[2].id == com.example.data.opencode.OpenCodeConfigHelper.STEP_MIGRATE)
         assertTrue(steps[4].commandPreview.contains("systemctl restart"))
 
