@@ -427,7 +427,7 @@ class ExampleRobolectricTest {
             verifyPersistence = true,
         )
         assertEquals(5, steps.size)
-        assertTrue(steps[1].title.contains("Проверка бинарника"))
+        assertTrue(steps[1].title.contains("检查 OpenCode 可执行文件"))
         assertTrue(steps[2].id == com.example.data.opencode.OpenCodeConfigHelper.STEP_MIGRATE)
         assertTrue(steps[4].commandPreview.contains("systemctl restart"))
 
@@ -777,7 +777,7 @@ class ExampleRobolectricTest {
         assertEquals("用时 14 秒", com.example.ui.chat.ChatTimeFormatter.resolveAssistantDuration(assistantMsg, 5_000L))
         val copied = com.example.ui.chat.ChatTimeFormatter.buildCopyableMessageText(assistantMsg)
         assertTrue(copied.contains("Привет, мир"))
-        assertTrue(copied.contains("错误：警告"))
+        assertTrue(copied.contains("错误：Предупреждение"))
     }
 
     @Test

@@ -187,5 +187,4 @@ class GitAndMobileChatTest {
         assertTrue(md.contains("## 用户"))
         assertTrue(md.contains("## 助手"))
         assertTrue(md.contains("Готово, всё работает."))
-    }
 }
