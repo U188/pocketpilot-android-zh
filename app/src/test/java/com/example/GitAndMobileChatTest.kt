@@ -184,8 +184,8 @@ class GitAndMobileChatTest {
 
         assertTrue(md.contains("# Рефакторинг SSH"))
         assertTrue(md.contains("`/root/pocketpilot`"))
-        assertTrue(md.contains("## Пользователь"))
-        assertTrue(md.contains("## Ассистент"))
+        assertTrue(md.contains("## 用户"))
+        assertTrue(md.contains("## 助手"))
         assertTrue(md.contains("Готово, всё работает."))
     }
 }
