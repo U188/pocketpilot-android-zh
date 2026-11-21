@@ -14,7 +14,7 @@ data class PortForwardRule(
         get() = "http://127.0.0.1:$localPort"
 
     val displayTitle: String
-        get() = label.takeIf { it.isNotBlank() } ?: "Порт $remotePort"
+        get() = label.takeIf { it.isNotBlank() } ?: "端口 $remotePort"
 }
 
 data class DiscoveredRemotePort(

@@ -19,7 +19,7 @@ object OpenCodeConfigHelper {
     const val STEP_VERIFY = "verify_server"
 
     const val DEFAULT_AUTH_USERNAME = "opencode"
-    const val SERVER_UNREACHABLE_MESSAGE = "Сервер не имеет доступа к интернету или адресу"
+    const val SERVER_UNREACHABLE_MESSAGE = "服务器无法访问互联网或目标地址"
 
     private const val PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
     private val secureRandom = SecureRandom()
@@ -40,17 +40,17 @@ object OpenCodeConfigHelper {
         verifyPersistence: Boolean = true,
     ): List<InstallStepItem> {
         val installTitle = when {
-            alreadyInstalled && forceUpdateBinary -> "2. Обновление OpenCode"
-            alreadyInstalled -> "2. Проверка бинарника OpenCode"
-            else -> "2. Установка OpenCode"
+            alreadyInstalled && forceUpdateBinary -> "2. 更新 OpenCode"
+            alreadyInstalled -> "2. 检查 OpenCode 可执行文件"
+            else -> "2. 安装 OpenCode"
         }
         val installDesc = when {
             alreadyInstalled && forceUpdateBinary ->
-                "Обновление существующего бинарника и определение абсолютного пути"
+                "更新现有可执行文件并检测绝对路径"
             alreadyInstalled ->
-                "OpenCode уже установлен — повторное скачивание не требуется"
+                "OpenCode 已安装，无需重新下载"
             else ->
-                "Скачивание официального бинарника и определение абсолютного пути (\$HOME/.opencode/bin/opencode)"
+                "下载官方可执行文件并检测绝对路径（\$HOME/.opencode/bin/opencode）"
         }
         val installPreview = if (alreadyInstalled && !forceUpdateBinary) {
             "test -x \"\$HOME/.opencode/bin/opencode\" || bash -lc 'command -v opencode'"
@@ -59,15 +59,15 @@ object OpenCodeConfigHelper {
         }
 
         val unitDesc = if (enablePasswordAuth) {
-            "Загрузка постоянного unit-файла и /etc/opencode-serve.env (chmod 600, Basic Auth) по SFTP, daemon-reload, enable --now (только 127.0.0.1:$port)"
+            "通过 SFTP 上传持久化 unit 文件和 /etc/opencode-serve.env（chmod 600，Basic Auth），执行 daemon-reload 和 enable --now（仅监听 127.0.0.1:$port）"
         } else {
-            "Загрузка постоянного unit-файла по SFTP, daemon-reload, enable --now (только 127.0.0.1:$port)"
+            "通过 SFTP 上传持久化 unit 文件，执行 daemon-reload 和 enable --now（仅监听 127.0.0.1:$port）"
         }
 
         val verifyDesc = if (verifyPersistence) {
-            "Проверка active, ss -ltn (127.0.0.1:$port), GET /session (JSON) + тест systemctl restart"
+            "检查 active 状态、ss -ltn（127.0.0.1:$port）、GET /session（JSON）并测试 systemctl restart"
         } else {
-            "Проверка active, ss -ltn (127.0.0.1:$port) и ответа GET /session (JSON)"
+            "检查 active 状态、ss -ltn（127.0.0.1:$port）和 GET /session（JSON）响应"
         }
 
         val verifyCmd = if (verifyPersistence) {
@@ -79,8 +79,8 @@ object OpenCodeConfigHelper {
         return listOf(
             InstallStepItem(
                 id = STEP_CHECK_ENV,
-                title = "1. Проверка окружения",
-                description = "ОС, архитектура, curl, systemd, права root/sudo и свободное место на диске",
+                title = "1. 检查环境",
+                description = "操作系统、架构、curl、systemd、root/sudo 权限和磁盘剩余空间",
                 commandPreview = "uname -s -m; command -v curl systemctl sudo; df -Pm \"\$HOME\"",
             ),
             InstallStepItem(
@@ -91,19 +91,19 @@ object OpenCodeConfigHelper {
             ),
             InstallStepItem(
                 id = STEP_MIGRATE,
-                title = "3. Миграция старого запуска",
-                description = "Остановка временных (transient) служб и сиротских процессов opencode serve для освобождения порта $port",
+                title = "3. 迁移旧启动方式",
+                description = "停止临时服务和遗留的 opencode serve 进程以释放端口 $port",
                 commandPreview = "systemctl stop opencode-serve; systemctl reset-failed opencode-serve; pkill -f 'opencode serve'",
             ),
             InstallStepItem(
                 id = STEP_SYSTEMD,
-                title = "4. Постоянный systemd-сервис (127.0.0.1:$port)",
+                title = "4. 持久化 systemd 服务 (127.0.0.1:$port)",
                 description = unitDesc,
                 commandPreview = "SFTP → opencode-serve.service (--hostname 127.0.0.1 --port $port) && systemctl daemon-reload && systemctl enable --now opencode-serve",
             ),
             InstallStepItem(
                 id = STEP_VERIFY,
-                title = "5. Автопроверка и устойчивость",
+                title = "5. 自动检查与稳定性",
                 description = verifyDesc,
                 commandPreview = verifyCmd,
             ),
@@ -365,7 +365,7 @@ object OpenCodeConfigHelper {
             }
             .distinctBy { it.id }
 
-        require(cleanModels.isNotEmpty()) { "Выберите хотя бы одну модель" }
+        require(cleanModels.isNotEmpty()) { "请至少选择一个模型" }
 
         val providersObj = root.optJSONObject("provider") ?: JSONObject().also {
             root.put("provider", it)
@@ -426,13 +426,13 @@ object OpenCodeConfigHelper {
         newApiKey: String,
     ): String {
         val trimmedKey = newApiKey.trim()
-        require(trimmedKey.isNotEmpty()) { "Введите новый API-ключ" }
+        require(trimmedKey.isNotEmpty()) { "请输入新的 API 密钥" }
         val root = parseConfigRootOrNull(existingJson)
-            ?: throw IllegalStateException("Не удалось прочитать существующий opencode.json")
+            ?: throw IllegalStateException("无法读取现有的 opencode.json")
         val providersObj = root.optJSONObject("provider")
-            ?: throw IllegalStateException("Секция provider не найдена в opencode.json")
+            ?: throw IllegalStateException("opencode.json 中未找到 provider 配置段")
         val providerObj = providersObj.optJSONObject(providerId)
-            ?: throw IllegalStateException("Провайдер $providerId не найден в opencode.json")
+            ?: throw IllegalStateException("opencode.json 中未找到供应商 $providerId")
         val optionsObj = providerObj.optJSONObject("options") ?: JSONObject().also {
             providerObj.put("options", it)
         }
@@ -449,7 +449,7 @@ object OpenCodeConfigHelper {
         providerId: String,
     ): String {
         val root = parseConfigRootOrNull(existingJson)
-            ?: throw IllegalStateException("Не удалось прочитать существующий opencode.json")
+            ?: throw IllegalStateException("无法读取现有的 opencode.json")
         val providersObj = root.optJSONObject("provider")
         providersObj?.remove(providerId)
 

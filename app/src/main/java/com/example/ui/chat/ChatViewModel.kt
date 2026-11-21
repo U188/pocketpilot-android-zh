@@ -385,7 +385,7 @@ class ChatViewModel(
                             startSseStream(connected.localTunnelPort)
                             loadProvidersAndAgents()
                             loadPendingPermissions()
-                            _toastMessages.tryEmit("Пароль сервера OpenCode синхронизирован")
+                            _toastMessages.tryEmit("已同步 OpenCode 服务器密码")
                             return@launch
                         }
                     }
@@ -395,7 +395,7 @@ class ChatViewModel(
                     it.copy(
                         isLoadingSessions = false,
                         isAuthRequired = true,
-                        errorMessage = "Сервер OpenCode требует пароль (HTTP 401). Синхронизируйте пароль с сервера или введите его вручную.",
+                        errorMessage = "OpenCode 服务器需要密码（HTTP 401）。请从服务器同步密码或手动输入。",
                     )
                 }
                 return@launch
@@ -405,7 +405,7 @@ class ChatViewModel(
                 it.copy(
                     isLoadingSessions = false,
                     isAuthRequired = false,
-                    errorMessage = err.message ?: "Не удалось подключиться к OpenCode API",
+                    errorMessage = err.message ?: "无法连接到 OpenCode API",
                 )
             }
         }
@@ -451,9 +451,9 @@ class ChatViewModel(
                 apiClient.invalidateDiscoveryCache()
                 startSseStream(connected.localTunnelPort)
                 refreshAll()
-                _toastMessages.tryEmit("Пароль сервера OpenCode синхронизирован")
+                _toastMessages.tryEmit("已同步 OpenCode 服务器密码")
             } else {
-                _toastMessages.tryEmit("Не удалось автоматически найти пароль на сервере — введите его вручную")
+                _toastMessages.tryEmit("无法在服务器上自动找到密码，请手动输入")
             }
         }
     }
@@ -470,7 +470,7 @@ class ChatViewModel(
         _uiState.update { it.copy(isAuthRequired = false, errorMessage = null) }
         startSseStream(connected.localTunnelPort)
         refreshAll()
-        _toastMessages.tryEmit("Пароль сервера OpenCode сохранён в Keystore")
+        _toastMessages.tryEmit("OpenCode 服务器密码已保存到 Keystore")
     }
 
     private fun loadProvidersAndAgents() {
@@ -522,7 +522,7 @@ class ChatViewModel(
                 }
                 viewModelScope.launch { preferencesRepository.setLastChatSessionId(created.id) }
             }.onFailure { err ->
-                _toastMessages.tryEmit(err.message ?: "Не удалось создать сессию")
+                _toastMessages.tryEmit(err.message ?: "无法创建会话")
             }
         }
     }
@@ -571,7 +571,7 @@ class ChatViewModel(
                     )
                 }
             }.onFailure { err ->
-                _toastMessages.tryEmit(err.message ?: "Не удалось переименовать сессию")
+                _toastMessages.tryEmit(err.message ?: "无法重命名会话")
             }
         }
     }
@@ -586,9 +586,9 @@ class ChatViewModel(
                     state.copy(sessions = updated, activeSessionId = forked.id)
                 }
                 loadMessages(forked.id)
-                _toastMessages.tryEmit("Создан форк сессии")
+                _toastMessages.tryEmit("会话分支已创建")
             }.onFailure { err ->
-                _toastMessages.tryEmit(err.message ?: "Не удалось создать форк сессии")
+                _toastMessages.tryEmit(err.message ?: "无法创建会话分支")
             }
         }
     }
@@ -607,7 +607,7 @@ class ChatViewModel(
                     )
                 }
             }.onFailure { err ->
-                _toastMessages.tryEmit(err.message ?: "Не удалось удалить сессию")
+                _toastMessages.tryEmit(err.message ?: "无法删除会话")
             }
         }
     }
@@ -637,7 +637,7 @@ class ChatViewModel(
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 _uiState.update { it.copy(isLoadingMessages = false) }
-                _toastMessages.tryEmit(err.message ?: "Не удалось загрузить сообщения")
+                _toastMessages.tryEmit(err.message ?: "无法加载消息")
             }
         }
     }
@@ -697,9 +697,9 @@ class ChatViewModel(
             runCatching {
                 promptTemplateRepository.save(template)
             }.onSuccess {
-                _toastMessages.tryEmit("Шаблон сохранён")
+                _toastMessages.tryEmit("模板已保存")
             }.onFailure { err ->
-                _toastMessages.tryEmit(err.message ?: "Не удалось сохранить шаблон")
+                _toastMessages.tryEmit(err.message ?: "无法保存模板")
             }
         }
     }
@@ -709,9 +709,9 @@ class ChatViewModel(
             runCatching {
                 promptTemplateRepository.delete(id)
             }.onSuccess {
-                _toastMessages.tryEmit("Шаблон удалён")
+                _toastMessages.tryEmit("模板已删除")
             }.onFailure { err ->
-                _toastMessages.tryEmit(err.message ?: "Не удалось удалить шаблон")
+                _toastMessages.tryEmit(err.message ?: "无法删除模板")
             }
         }
     }
@@ -721,12 +721,12 @@ class ChatViewModel(
         val currentCount = _uiState.value.attachedImages.size
         val remainingSlots = (MAX_ATTACHED_IMAGES - currentCount).coerceAtLeast(0)
         if (remainingSlots <= 0) {
-            _toastMessages.tryEmit("Можно прикрепить не более $MAX_ATTACHED_IMAGES изображений за раз")
+            _toastMessages.tryEmit("一次最多可附加 $MAX_ATTACHED_IMAGES 张图片")
             return
         }
         val toProcess = uris.take(remainingSlots)
         if (uris.size > remainingSlots) {
-            _toastMessages.tryEmit("Добавлены первые $remainingSlots из ${uris.size} (лимит $MAX_ATTACHED_IMAGES)")
+            _toastMessages.tryEmit("已添加前 $remainingSlots 张，共 ${uris.size} 张（上限 $MAX_ATTACHED_IMAGES 张）")
         }
 
         viewModelScope.launch {
@@ -739,7 +739,7 @@ class ChatViewModel(
                     added.add(ref)
                 }.onFailure { err ->
                     if (err is CancellationException) throw err
-                    _toastMessages.tryEmit(err.message ?: "Не удалось обработать изображение")
+                    _toastMessages.tryEmit(err.message ?: "无法处理图片")
                 }
             }
             _uiState.update { state ->
@@ -829,24 +829,24 @@ class ChatViewModel(
         val lastMsg = state.messages.lastOrNull()
         val report = buildString {
             appendLine("=== PocketPilot Chat Diagnostics ===")
-            appendLine("Время: $timeStr")
-            appendLine("Сервер: ${conn?.profile?.name ?: "н/д"} (${conn?.profile?.host ?: "н/д"}:${conn?.profile?.openCodePort ?: state.openCodePort})")
-            appendLine("SSH-туннель: ${conn?.localTunnelPort?.let { "127.0.0.1:$it" } ?: "не активен"}")
-            appendLine("Рабочее пространство: ${state.activeWorkspacePath.ifBlank { "по умолчанию" }}")
-            appendLine("ID сессии: ${state.activeSessionId ?: "нет"}")
-            appendLine("Модель: ${state.selectedProviderId}/${state.selectedModelId} (${state.selectedModelDisplay ?: "н/д"})")
-            appendLine("Агент: ${state.selectedAgentName}")
-            appendLine("Статус SSE: ${state.sseStatus}")
-            appendLine("Сессия занята: ${state.isActiveSessionBusy} (isSending=${state.isSending})")
-            appendLine("Сообщений в чате: ${state.messages.size}")
+            appendLine("时间：$timeStr")
+            appendLine("服务器：${conn?.profile?.name ?: "无"}（${conn?.profile?.host ?: "无"}:${conn?.profile?.openCodePort ?: state.openCodePort}）")
+            appendLine("SSH 隧道：${conn?.localTunnelPort?.let { "127.0.0.1:$it" } ?: "未启用"}")
+            appendLine("工作区：${state.activeWorkspacePath.ifBlank { "默认" }}")
+            appendLine("会话 ID：${state.activeSessionId ?: "无"}")
+            appendLine("模型：${state.selectedProviderId}/${state.selectedModelId}（${state.selectedModelDisplay ?: "无"}）")
+            appendLine("智能体：${state.selectedAgentName}")
+            appendLine("SSE 状态：${state.sseStatus}")
+            appendLine("会话忙碌：${state.isActiveSessionBusy}（正在发送=${state.isSending}）")
+            appendLine("聊天消息数：${state.messages.size}")
             if (sinceLastEventSec >= 0L) {
-                appendLine("Секунд с последнего SSE-события: $sinceLastEventSec")
+                appendLine("距上次 SSE 事件：$sinceLastEventSec 秒")
             }
             if (!lastSessionError.isNullOrBlank()) {
-                appendLine("Последняя ошибка: $lastSessionError")
+                appendLine("最近错误：$lastSessionError")
             }
             if (lastMsg?.error?.isNotBlank() == true) {
-                appendLine("Ошибка последнего сообщения: ${lastMsg.error}")
+                appendLine("最近一条消息的错误：${lastMsg.error}")
             }
         }
         return OpenCodeConfigHelper.sanitizeLogs(report)
@@ -904,11 +904,11 @@ class ChatViewModel(
         }
         val attachments = if (lastSentPromptText.isNotBlank()) lastSentAttachments else emptyList()
         if (promptText.isBlank() && attachments.isEmpty()) {
-            _toastMessages.tryEmit("Модель изменена на $modelId")
+            _toastMessages.tryEmit("模型已切换为 $modelId")
             return
         }
         _uiState.update { it.copy(isSending = true, isResponseStalled = false) }
-        _toastMessages.tryEmit("Повтор отправки с моделью $modelId…")
+        _toastMessages.tryEmit("正在使用模型 $modelId 重新发送…")
         dispatchPromptToServer(
             text = promptText,
             attachments = attachments,
@@ -974,7 +974,7 @@ class ChatViewModel(
                 )
             }
             _uiState.value.activeSessionId?.let { markSessionBusy(it, busy = false) }
-            _toastMessages.tryEmit(t.message ?: "Не удалось отправить сообщение")
+            _toastMessages.tryEmit(t.message ?: "无法发送消息")
         }
     }
 
@@ -988,7 +988,7 @@ class ChatViewModel(
                 markSessionBusy(sessionId, busy = false)
                 _uiState.update { it.copy(isSending = false, isResponseStalled = false) }
             }.onFailure { err ->
-                _toastMessages.tryEmit(err.message ?: "Не удалось остановить генерацию")
+                _toastMessages.tryEmit(err.message ?: "无法停止生成")
             }
         }
     }
@@ -999,11 +999,11 @@ class ChatViewModel(
             runCatching {
                 apiClient.revertSession(sessionId, messageId)
             }.onSuccess {
-                _toastMessages.tryEmit("Изменения откатаны")
+                _toastMessages.tryEmit("更改已回退")
                 loadMessages(sessionId)
                 loadSessionDiffs(sessionId)
             }.onFailure { err ->
-                _toastMessages.tryEmit(err.message ?: "Не удалось откатить изменения")
+                _toastMessages.tryEmit(err.message ?: "无法回退更改")
             }
         }
     }
@@ -1054,14 +1054,14 @@ class ChatViewModel(
                     )
                 }
                 val toast = when (option) {
-                    PermissionReplyOption.ONCE -> "Разрешено один раз"
-                    PermissionReplyOption.ALWAYS -> "Разрешено для сессии"
-                    PermissionReplyOption.REJECT -> "Действие отклонено"
+                    PermissionReplyOption.ONCE -> "已允许一次"
+                    PermissionReplyOption.ALWAYS -> "已对此会话允许"
+                    PermissionReplyOption.REJECT -> "操作已拒绝"
                 }
                 _toastMessages.tryEmit(toast)
             }.onFailure { err ->
                 _uiState.update { it.copy(isSubmittingPermission = false) }
-                _toastMessages.tryEmit(err.message ?: "Не удалось отправить ответ на разрешение")
+                _toastMessages.tryEmit(err.message ?: "无法提交授权响应")
             }
         }
     }
@@ -1133,7 +1133,7 @@ class ChatViewModel(
                 _uiState.update {
                     it.copy(
                         isWorkspacePickerLoading = false,
-                        workspacePickerError = err.message ?: "Не удалось открыть папку по SFTP",
+                        workspacePickerError = err.message ?: "无法通过 SFTP 打开文件夹",
                     )
                 }
             }
@@ -1151,14 +1151,14 @@ class ChatViewModel(
                 sftpRepository.createDirectory(parentPath = parentPath, name = cleanName)
             }.onSuccess { createdPath ->
                 _uiState.update { it.copy(isCreatingWorkspaceFolder = false) }
-                _toastMessages.tryEmit("Папка «$cleanName» создана")
+                _toastMessages.tryEmit("文件夹“$cleanName”已创建")
                 loadWorkspacePickerDirectory(createdPath)
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 _uiState.update {
                     it.copy(
                         isCreatingWorkspaceFolder = false,
-                        workspacePickerError = err.message ?: "Не удалось создать папку",
+                        workspacePickerError = err.message ?: "无法创建文件夹",
                     )
                 }
             }
@@ -1198,7 +1198,7 @@ class ChatViewModel(
             refreshAll()
         }
         refreshGitBadge(normalized)
-        _toastMessages.tryEmit("Рабочее пространство: $normalized")
+        _toastMessages.tryEmit("工作区：$normalized")
     }
 
     private fun ensureWorkspaceInitialized(profileId: Long, detectedHomeDir: String?) {
@@ -1589,7 +1589,7 @@ class ChatViewModel(
                             setup = state.setup.copy(
                                 serverStatus = OpenCodeServerStatus.NOT_INSTALLED,
                                 errorMessage = OpenCodeConfigHelper.sanitizeLogs(
-                                    err.message ?: "Не удалось проверить состояние OpenCode на сервере",
+                                    err.message ?: "无法检查服务器上的 OpenCode 状态",
                                 ),
                             ),
                         )
@@ -1714,7 +1714,7 @@ class ChatViewModel(
                         errorMessage = null,
                         verificationReport = null,
                         isRunningAction = true,
-                        liveLog = if (startFromIndex == 0) "" else state.setup.liveLog + "\n--- Повтор шага ${startFromIndex + 1} ---\n",
+                        liveLog = if (startFromIndex == 0) "" else state.setup.liveLog + "\n--- 重试第 ${startFromIndex + 1} 步 ---\n",
                     ),
                 )
             }
@@ -1746,8 +1746,8 @@ class ChatViewModel(
                             )
                             binaryPath = envInfo.opencodePath
                             _uiState.update { it.copy(setup = it.setup.copy(envInfo = envInfo)) }
-                            val freeLabel = if (envInfo.freeSpaceMb >= 0) "${envInfo.freeSpaceMb} МБ" else "н/д"
-                            "${envInfo.osName} ${envInfo.arch}, свободно $freeLabel, systemd=да"
+                            val freeLabel = if (envInfo.freeSpaceMb >= 0) "${envInfo.freeSpaceMb} MB" else "无"
+                            "${envInfo.osName} ${envInfo.arch}，剩余空间 $freeLabel，systemd=可用"
                         }
 
                         1 -> {
@@ -1770,7 +1770,7 @@ class ChatViewModel(
                                 envInfo = serverInstaller.inspectEnvironment(port, requireSystemd = true, onLog = appendLog)
                             }
                             serverInstaller.migrateLegacyRuns(envInfo, appendLog)
-                            "Порт $port освобождён, временные службы остановлены"
+                            "端口 $port 已释放，临时服务已停止"
                         }
 
                         3 -> {
@@ -1811,7 +1811,7 @@ class ChatViewModel(
                                 it.copy(setup = it.setup.copy(verificationReport = report))
                             }
                             if (report.restartSurvived == true) {
-                                "active, 127.0.0.1:$port, /session JSON, restart пройден"
+                                "active，127.0.0.1:$port，/session JSON 正常，重启检查通过"
                             } else {
                                 "active, 127.0.0.1:$port, /session JSON OK"
                             }
@@ -1826,9 +1826,9 @@ class ChatViewModel(
                 } else {
                     val err = stepResult.exceptionOrNull()
                     if (err is CancellationException) throw err
-                    val msg = OpenCodeConfigHelper.sanitizeLogs(err?.message ?: "Ошибка выполнения шага")
+                    val msg = OpenCodeConfigHelper.sanitizeLogs(err?.message ?: "步骤执行失败")
                     updateStepStatus(stepIndex, InstallStepStatus.ERROR, msg)
-                    appendLog("✗ Ошибка: $msg")
+                    appendLog("✗ 错误：$msg")
                     _uiState.update { state ->
                         state.copy(
                             setup = state.setup.copy(
@@ -1925,10 +1925,10 @@ class ChatViewModel(
                 }
                 refreshAll()
                 startSseStream(tunnelPort)
-                _toastMessages.tryEmit("Служба OpenCode запущена")
+                _toastMessages.tryEmit("OpenCode 服务已启动")
             }.onFailure { err ->
                 if (err is CancellationException) throw err
-                val msg = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "Не удалось запустить сервер OpenCode")
+                val msg = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "无法启动 OpenCode 服务器")
                 _uiState.update { state ->
                     state.copy(
                         setup = state.setup.copy(
@@ -1991,7 +1991,7 @@ class ChatViewModel(
                         setup = it.setup.copy(
                             isLoadingConfiguredProviders = false,
                             configuredProvidersError = OpenCodeConfigHelper.sanitizeLogs(
-                                err.message ?: "Не удалось прочитать список провайдеров",
+                                err.message ?: "无法读取供应商列表",
                             ),
                         ),
                     )
@@ -2305,7 +2305,7 @@ class ChatViewModel(
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
-                    err.message ?: "Не удалось загрузить список моделей",
+                    err.message ?: "无法加载模型列表",
                     listOf(secretKey),
                 )
                 _uiState.update {
@@ -2332,7 +2332,7 @@ class ChatViewModel(
                             success = false,
                             httpCode = null,
                             modelId = targetModelId,
-                            message = "Сначала выберите хотя бы одну модель",
+                            message = "请先至少选择一个模型",
                         ),
                     ),
                 )
@@ -2370,7 +2370,7 @@ class ChatViewModel(
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
-                    err.message ?: "Не удалось проверить модель",
+                    err.message ?: "无法测试模型",
                     listOf(secretKey),
                 )
                 _uiState.update {
@@ -2402,7 +2402,7 @@ class ChatViewModel(
         }
         if (chosenModels.isEmpty()) {
             _uiState.update {
-                it.copy(setup = it.setup.copy(errorMessage = "Выберите хотя бы одну модель из списка или введите ID вручную"))
+                it.copy(setup = it.setup.copy(errorMessage = "请至少从列表中选择一个模型，或手动输入模型 ID"))
             }
             return
         }
@@ -2453,7 +2453,7 @@ class ChatViewModel(
                             providerId = savedProviderId,
                             defaultModelId = savedDefaultModelId,
                             tunnelPort = outcome.tunnelPort ?: connected.localTunnelPort,
-                            toastMessage = "Провайдер сохранён, служба перезапущена, выбрана модель $savedDefaultModelId",
+                            toastMessage = "供应商已保存，服务已重启，当前模型为 $savedDefaultModelId",
                         )
                     }
 
@@ -2494,7 +2494,7 @@ class ChatViewModel(
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
-                    err.message ?: "Не удалось сохранить конфигурацию на сервере",
+                    err.message ?: "无法将配置保存到服务器",
                     listOf(secretKey),
                 )
                 updateProviderSaveStep(0, InstallStepStatus.ERROR, safeMsg)
@@ -2541,7 +2541,7 @@ class ChatViewModel(
                                 providerId = outcome.providerId,
                                 defaultModelId = outcome.defaultModelId,
                                 tunnelPort = tunnel,
-                                toastMessage = "Сервер ответил (${outcome.detail}), выбрана модель ${outcome.defaultModelId}",
+                                toastMessage = "服务器已响应（${outcome.detail}），当前模型为 ${outcome.defaultModelId}",
                             )
                         } else {
                             apiClient.invalidateDiscoveryCache()
@@ -2556,7 +2556,7 @@ class ChatViewModel(
                             loadConfiguredProviders()
                             refreshAll()
                             startSseStream(tunnel)
-                            _toastMessages.tryEmit("Сервер OpenCode отвечает (${outcome.detail})")
+                            _toastMessages.tryEmit("OpenCode 服务器已响应（${outcome.detail}）")
                         }
                     }
 
@@ -2589,7 +2589,7 @@ class ChatViewModel(
                     it.copy(
                         setup = it.setup.copy(
                             isRetryingProviderCheck = false,
-                            errorMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "Ошибка повторной проверки"),
+                            errorMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "重新检查失败"),
                         ),
                     )
                 }
@@ -2608,7 +2608,7 @@ class ChatViewModel(
                     providerId = warning.providerId,
                     defaultModelId = warning.defaultModelId,
                     tunnelPort = tunnelPort,
-                    toastMessage = "Конфиг сохранён. Выбрана модель ${warning.defaultModelId}",
+                    toastMessage = "配置已保存。当前模型为 ${warning.defaultModelId}",
                 )
             } else {
                 apiClient.invalidateDiscoveryCache()
@@ -2709,7 +2709,7 @@ class ChatViewModel(
                         }
                         loadConfiguredProviders()
                         refreshAll()
-                        _toastMessages.tryEmit("API-ключ провайдера «${provider.name}» обновлён")
+                        _toastMessages.tryEmit("供应商“${provider.name}”的 API 密钥已更新")
                     }
 
                     is ProviderApplyOutcome.SavedWithCheckWarning -> {
@@ -2746,7 +2746,7 @@ class ChatViewModel(
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
-                    err.message ?: "Не удалось обновить API-ключ",
+                    err.message ?: "无法更新 API 密钥",
                     listOf(cleanKey),
                 )
                 updateProviderSaveStep(0, InstallStepStatus.ERROR, safeMsg)
@@ -2810,7 +2810,7 @@ class ChatViewModel(
                         }
                         loadConfiguredProviders()
                         refreshAll()
-                        _toastMessages.tryEmit("Провайдер «${provider.name}» удалён")
+                        _toastMessages.tryEmit("供应商“${provider.name}”已删除")
                     }
 
                     is ProviderApplyOutcome.SavedWithCheckWarning -> {
@@ -2847,7 +2847,7 @@ class ChatViewModel(
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 val safeMsg = OpenCodeConfigHelper.sanitizeLogs(
-                    err.message ?: "Не удалось удалить провайдер",
+                    err.message ?: "无法删除供应商",
                 )
                 updateProviderSaveStep(0, InstallStepStatus.ERROR, safeMsg)
                 _uiState.update {
@@ -2863,9 +2863,9 @@ class ChatViewModel(
     }
 
     private fun buildProviderSaveSteps(): List<ProviderSaveStepItem> = listOf(
-        ProviderSaveStepItem(id = "write_config", title = "Запись конфига (opencode.json)"),
-        ProviderSaveStepItem(id = "restart_service", title = "Перезапуск службы opencode-serve"),
-        ProviderSaveStepItem(id = "wait_server", title = "Ожидание ответа сервера (до 40 с)"),
+        ProviderSaveStepItem(id = "write_config", title = "正在写入配置（opencode.json）"),
+        ProviderSaveStepItem(id = "restart_service", title = "正在重启 opencode-serve 服务"),
+        ProviderSaveStepItem(id = "wait_server", title = "等待服务器响应（最多 40 秒）"),
     )
 
     private fun updateProviderSaveStep(index: Int, status: InstallStepStatus, detail: String?) {

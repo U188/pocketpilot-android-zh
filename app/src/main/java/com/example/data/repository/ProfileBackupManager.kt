@@ -30,7 +30,7 @@ class ProfileBackupManager(
 
     suspend fun exportEncryptedBackup(password: String): String = withContext(Dispatchers.IO) {
         val profiles = profileRepository.profiles.first()
-        require(profiles.isNotEmpty()) { "Нет профилей серверов для экспорта" }
+        require(profiles.isNotEmpty()) { "没有可导出的服务器配置" }
 
         val profilesArray = JSONArray()
         for (profile in profiles) {
@@ -69,10 +69,10 @@ class ProfileBackupManager(
     ): ProfileImportResult = withContext(Dispatchers.IO) {
         val decryptedJson = ProfileBackupCrypto.decrypt(encryptedContent, password)
         val root = runCatching { JSONObject(decryptedJson) }.getOrElse {
-            throw IllegalArgumentException("Расшифрованный файл повреждён")
+            throw IllegalArgumentException("解密后的文件已损坏")
         }
         val profilesArr = root.optJSONArray("profiles")
-            ?: throw IllegalArgumentException("В файле резервной копии не найден список профилей")
+            ?: throw IllegalArgumentException("备份文件中没有配置列表")
 
         val existing = profileRepository.profiles.first()
         var imported = 0
@@ -142,7 +142,7 @@ class ProfileBackupManager(
         }
 
         if (imported == 0 && updated == 0) {
-            throw IllegalArgumentException("В файле не найдено корректных профилей серверов")
+            throw IllegalArgumentException("文件中没有有效的服务器配置")
         }
 
         ProfileImportResult(importedCount = imported, updatedCount = updated)

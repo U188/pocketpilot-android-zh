@@ -125,7 +125,7 @@ class SshConnectionManager(
                 if (profile == null) {
                     _connectionState.value = SshConnectionState.Error(
                         profile = null,
-                        message = "Профиль сервера не найден",
+                        message = "未找到服务器配置",
                     )
                     return@launch
                 }
@@ -133,14 +133,14 @@ class SshConnectionManager(
                 if (profile.host.isBlank()) {
                     _connectionState.value = SshConnectionState.Error(
                         profile = profile,
-                        message = "Не указан адрес сервера (хост/IP).",
+                        message = "未填写服务器地址（主机名/IP）。",
                     )
                     return@launch
                 }
                 if (profile.username.isBlank()) {
                     _connectionState.value = SshConnectionState.Error(
                         profile = profile,
-                        message = "Не указано имя пользователя SSH.",
+                        message = "未填写 SSH 用户名。",
                     )
                     return@launch
                 }
@@ -352,7 +352,7 @@ class SshConnectionManager(
                     } else {
                         _connectionState.value = SshConnectionState.Error(
                             profile = profile,
-                            message = message?.takeIf { it.isNotBlank() } ?: "Соединение разорвано сервером",
+                            message = message?.takeIf { it.isNotBlank() } ?: "服务器已断开连接",
                         )
                     }
                 }
@@ -409,13 +409,13 @@ class SshConnectionManager(
             when (profile.authType) {
                 AuthType.PASSWORD -> {
                     val password = secrets.password
-                        ?: throw IllegalStateException("Пароль не задан для профиля")
+                        ?: throw IllegalStateException("此配置未设置密码")
                     client.authPassword(profile.username.trim(), password)
                 }
 
                 AuthType.PRIVATE_KEY -> {
                     val privateKeyPem = secrets.privateKeyPem
-                        ?: throw IllegalStateException("Приватный ключ не задан для профиля")
+                        ?: throw IllegalStateException("此配置未设置私钥")
                     val passwordFinder = secrets.passphrase
                         ?.takeIf { it.isNotEmpty() }
                         ?.let { PasswordUtils.createOneOff(it.toCharArray()) }
@@ -469,34 +469,34 @@ class SshConnectionManager(
         val root = generateSequence(t) { it.cause }.lastOrNull() ?: t
         return when {
             root is UnknownHostException ->
-                "Не удалось разрешить хост. Проверьте адрес сервера и интернет."
+                "无法解析主机名，请检查服务器地址和网络连接。"
             root is ConnectException ->
-                "Сервер отклонил подключение. Проверьте IP, порт SSH и firewall."
+                "服务器拒绝了连接，请检查 IP、SSH 端口和防火墙。"
             root is NoRouteToHostException ->
-                "Нет маршрута к серверу. Проверьте сеть или VPN."
+                "无法连接到服务器，请检查网络或 VPN。"
             root is SocketTimeoutException ->
-                "Превышено время ожидания ответа от сервера."
+                "等待服务器响应超时。"
             root is SecurityException ->
-                "Ошибка доступа сети или безопасности: ${root.message ?: root.javaClass.simpleName}"
+                "网络或安全访问错误：${root.message ?: root.javaClass.simpleName}"
             root is NetworkOnMainThreadException ->
-                "Сетевая ошибка потока выполнения. Попробуйте подключиться снова."
+                "网络线程发生错误，请重试连接。"
             root is NoSuchAlgorithmException || root is GeneralSecurityException ->
-                "Ошибка криптопровайдера SSH: ${root.message ?: root.javaClass.simpleName}"
+                "SSH 加密提供程序错误：${root.message ?: root.javaClass.simpleName}"
             root is LinkageError ->
-                "Ошибка совместимости SSH-библиотеки: ${root.javaClass.simpleName}: ${root.message.orEmpty()}"
+                "SSH 库兼容性错误：${root.javaClass.simpleName}：${root.message.orEmpty()}"
             t is UserAuthException ->
-                "Ошибка авторизации SSH: неверный логин, пароль или ключ."
+                "SSH 身份验证失败：用户名、密码或密钥无效。"
             t is TransportException && t.disconnectReason == DisconnectReason.HOST_KEY_NOT_VERIFIABLE ->
-                "Ключ хоста не подтверждён пользователем."
+                "用户尚未确认主机密钥。"
             t is IllegalStateException && !t.message.isNullOrBlank() ->
                 t.message!!
             else -> {
                 val detail = t.message?.takeIf { it.isNotBlank() }
                     ?: root.message?.takeIf { it.isNotBlank() }
                 if (detail != null) {
-                    "Ошибка SSH (${root.javaClass.simpleName}): $detail"
+                    "SSH 错误（${root.javaClass.simpleName}）：$detail"
                 } else {
-                    "Не удалось установить SSH-соединение (${root.javaClass.simpleName})"
+                    "无法建立 SSH 连接（${root.javaClass.simpleName}）"
                 }
             }
         }

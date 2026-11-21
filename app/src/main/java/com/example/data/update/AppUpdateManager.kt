@@ -148,7 +148,7 @@ class AppUpdateManager(
                             isChecking = false,
                             availableRelease = release,
                             showUpdateDialog = true,
-                            statusMessage = "Доступна версия ${release.displayVersion} (сборка ${release.buildNumber})",
+                            statusMessage = "有可用版本：${release.displayVersion}（构建 ${release.buildNumber}）",
                             isError = false,
                             isUpToDate = false,
                             downloadState = if (sameRelease) prev.downloadState else ApkDownloadState.Idle,
@@ -161,7 +161,7 @@ class AppUpdateManager(
                             availableRelease = null,
                             showUpdateDialog = false,
                             statusMessage = if (force) {
-                                "Установлена актуальная версия ($currentVersionName, сборка $currentVersionCode)"
+                                "当前已是最新版本（$currentVersionName，构建 $currentVersionCode）"
                             } else {
                                 it.statusMessage
                             },
@@ -194,7 +194,7 @@ class AppUpdateManager(
             _state.update {
                 it.copy(
                     downloadState = ApkDownloadState.Failed(
-                        "В релизе ${release.tagName} не найден APK-файл ($TARGET_APK_NAME).",
+                        "版本 ${release.tagName} 中未找到 APK 文件（$TARGET_APK_NAME）。",
                     ),
                 )
             }
@@ -253,7 +253,7 @@ class AppUpdateManager(
                     }
 
                     val body = response.body
-                        ?: throw GitHubUpdateException("Пустой ответ при загрузке APK")
+                        ?: throw GitHubUpdateException("下载 APK 时服务器返回空响应")
                     val totalBytes = body.contentLength()
                     var downloadedBytes = 0L
                     var lastEmitMs = 0L
@@ -293,7 +293,7 @@ class AppUpdateManager(
 
                     if (downloadedBytes <= 0L || !isValidApkMagic(partFile)) {
                         runCatching { partFile.delete() }
-                        throw GitHubUpdateException("Загруженный файл повреждён или не является APK")
+                        throw GitHubUpdateException("下载的文件已损坏或不是有效的 APK")
                     }
 
                     if (finalFile.exists()) {
@@ -447,13 +447,13 @@ class AppUpdateManager(
         }
 
         fun formatBytes(bytes: Long): String {
-            if (bytes < 0L) return "0 Б"
+            if (bytes < 0L) return "0 字节"
             val kb = 1024.0
             val mb = kb * 1024.0
             return when {
-                bytes >= mb -> String.format(Locale.US, "%.1f МБ", bytes / mb)
-                bytes >= kb -> String.format(Locale.US, "%.0f КБ", bytes / kb)
-                else -> "$bytes Б"
+                bytes >= mb -> String.format(Locale.US, "%.1f MB", bytes / mb)
+                bytes >= kb -> String.format(Locale.US, "%.0f KB", bytes / kb)
+                else -> "$bytes 字节"
             }
         }
 
@@ -486,16 +486,16 @@ class AppUpdateManager(
             val root = try {
                 JSONObject(rawJson)
             } catch (e: Exception) {
-                throw GitHubUpdateException("GitHub вернул некорректный ответ (не JSON)")
+                throw GitHubUpdateException("GitHub 返回了无效响应（不是 JSON）")
             }
 
             val tagName = root.optString("tag_name", "").trim()
             val buildNumber = parseBuildNumberFromTag(tagName)
                 ?: throw GitHubUpdateException(
                     if (tagName.isBlank()) {
-                        "В релизе GitHub не указан тег версии"
+                        "GitHub Release 未设置版本标签"
                     } else {
-                        "Не удалось определить номер сборки из тега «$tagName»"
+                        "无法从标签“$tagName”解析构建编号"
                     },
                 )
 
@@ -547,26 +547,26 @@ class AppUpdateManager(
         ): String {
             return when {
                 httpCode == 404 ->
-                    "Релизы ещё не опубликованы в репозитории GitHub (HTTP 404)"
+                    "汉化仓库尚未发布 Release（HTTP 404）"
                 httpCode == 429 || (httpCode == 403 && (rateLimitRemaining == "0" || responseBody.contains("rate limit", ignoreCase = true))) ->
-                    "Превышен лимит запросов GitHub API (без токена — до 60 запросов в час). Попробуйте позже."
+                    "已达到 GitHub API 请求限制（未认证时每小时最多 60 次），请稍后重试。"
                 httpCode == 403 ->
-                    "Доступ к GitHub Releases временно ограничен (HTTP 403). Попробуйте позже."
+                    "GitHub Releases 暂时拒绝访问（HTTP 403），请稍后重试。"
                 httpCode in 500..599 ->
-                    "Сервер GitHub временно недоступен (HTTP $httpCode). Попробуйте позже."
+                    "GitHub 服务器暂时不可用（HTTP $httpCode），请稍后重试。"
                 else ->
-                    "Не удалось проверить обновления (GitHub HTTP $httpCode)"
+                    "检查更新失败（GitHub HTTP $httpCode）"
             }
         }
 
         fun mapThrowableToMessage(err: Throwable): String {
             return when (err) {
-                is GitHubUpdateException -> err.message ?: "Ошибка проверки обновлений"
-                is UnknownHostException -> "Нет подключения к интернету или GitHub недоступен"
-                is SocketTimeoutException -> "Превышено время ожидания ответа от GitHub"
-                is SSLException -> "Ошибка защищённого соединения (TLS) с GitHub"
-                is IOException -> "Ошибка сети при проверке обновлений: ${err.localizedMessage ?: "нет связи"}"
-                else -> "Не удалось проверить обновления: ${err.localizedMessage ?: err::class.simpleName}"
+                is GitHubUpdateException -> err.message ?: "检查更新时出错"
+                is UnknownHostException -> "网络未连接或无法访问 GitHub"
+                is SocketTimeoutException -> "等待 GitHub 响应超时"
+                is SSLException -> "与 GitHub 建立安全连接（TLS）失败"
+                is IOException -> "检查更新时发生网络错误：${err.localizedMessage ?: "无网络连接"}"
+                else -> "检查更新失败：${err.localizedMessage ?: err::class.simpleName}"
             }
         }
     }

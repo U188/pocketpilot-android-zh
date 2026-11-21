@@ -24,7 +24,7 @@ class PromptTemplateRepository(
         val cleanSlug = sanitizeSlashCommand(template.slashCommand, fallbackTitle = template.title)
         val cleanTitle = template.title.trim().ifBlank { "/$cleanSlug" }
         val cleanBody = template.body.trim()
-        require(cleanBody.isNotBlank()) { "Текст шаблона не может быть пустым" }
+        require(cleanBody.isNotBlank()) { "模板内容不能为空" }
 
         val entity = PromptTemplateEntity(
             id = template.id,
@@ -107,41 +107,41 @@ class PromptTemplateRepository(
 
         fun defaultTemplates(nowMillis: Long = System.currentTimeMillis()): List<PromptTemplate> = listOf(
             PromptTemplate(
-                title = "Код-ревью изменений",
+                title = "代码审查",
                 slashCommand = "review",
-                body = "Проверь текущие изменения (git diff): найди потенциальные баги, утечки ресурсов, проблемы безопасности и предложи точечные улучшения.",
+                body = "检查当前更改（git diff），找出潜在错误、资源泄漏和安全问题，并提出针对性的改进建议。",
                 autoSend = false,
                 sortOrder = 0,
                 createdAtMillis = nowMillis,
             ),
             PromptTemplate(
-                title = "Найти и исправить ошибку",
+                title = "查找并修复问题",
                 slashCommand = "fix",
-                body = "Найди первопричину ошибки, исправь её минимальными безопасными правками и проверь сборку и тесты.",
+                body = "找出问题根因，以最小且安全的改动修复，并运行构建和测试进行验证。",
                 autoSend = false,
                 sortOrder = 1,
                 createdAtMillis = nowMillis,
             ),
             PromptTemplate(
-                title = "Написать тесты",
+                title = "编写测试",
                 slashCommand = "tests",
-                body = "Напиши модульные тесты для последних изменений с покрытием пограничных случаев и запусти их для проверки.",
+                body = "为最近的更改编写单元测试，覆盖边界情况，并运行测试进行验证。",
                 autoSend = false,
                 sortOrder = 2,
                 createdAtMillis = nowMillis,
             ),
             PromptTemplate(
-                title = "Объяснить модуль",
+                title = "解释模块",
                 slashCommand = "explain",
-                body = "Кратко и структурированно объясни архитектуру этого модуля, поток данных и ключевые точки входа.",
+                body = "简明、结构化地说明此模块的架构、数据流和关键入口。",
                 autoSend = false,
                 sortOrder = 3,
                 createdAtMillis = nowMillis,
             ),
             PromptTemplate(
-                title = "Описание коммита",
+                title = "生成提交说明",
                 slashCommand = "commit",
-                body = "Посмотри git diff и предложи короткое понятное commit-сообщение в формате Conventional Commits (на русском и английском).",
+                body = "查看 git diff，并按照 Conventional Commits 格式拟定简短清晰的提交说明（中文和英文）。",
                 autoSend = false,
                 sortOrder = 4,
                 createdAtMillis = nowMillis,

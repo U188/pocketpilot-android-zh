@@ -78,6 +78,6 @@ class LocalSafBrowser(context: Context) {
 
     fun folderDisplayName(treeUri: Uri): String {
         val docId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
-        return docId?.substringAfter(':')?.ifBlank { docId } ?: treeUri.lastPathSegment ?: "Папка телефона"
+        return docId?.substringAfter(':')?.ifBlank { docId } ?: treeUri.lastPathSegment ?: "手机文件夹"
     }
 }

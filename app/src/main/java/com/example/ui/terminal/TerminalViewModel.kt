@@ -358,7 +358,7 @@ class TerminalViewModel(
 
     fun pasteText(text: String) {
         if (text.isEmpty()) {
-            _toastMessages.tryEmit("Буфер обмена пуст")
+            _toastMessages.tryEmit("剪贴板为空")
             return
         }
         if (DangerousCommandDetector.isDangerous(text)) {
@@ -423,7 +423,7 @@ class TerminalViewModel(
         val payload = if (autoExecute) "$text\r" else text
         viewModelScope.launch {
             if (payload.length > SshTerminalSession.PASTE_CHUNK_BYTES) {
-                _toastMessages.tryEmit("Вставка ${payload.length} символов порциями…")
+                _toastMessages.tryEmit("正在分批粘贴 ${payload.length} 个字符…")
             }
             session.sendTextChunked(payload)
         }

@@ -105,7 +105,7 @@ fun UsageScreen(
                     context.contentResolver.openOutputStream(uri)?.use { out ->
                         out.write(csv.toByteArray(Charsets.UTF_8))
                         out.flush()
-                    } ?: error("Не удалось открыть файл для записи")
+                    } ?: error("无法打开文件进行写入")
                 }
             }
             if (result.isSuccess) {
@@ -732,14 +732,14 @@ private fun UsageAggregateRowCard(
 
             val cacheTotal = row.cacheReadTokens + row.cacheWriteTokens
             val cachePart = if (cacheTotal > 0L) {
-                " • кэш ${UsageCalculator.formatTokenCount(cacheTotal)}"
+                " • 缓存 ${UsageCalculator.formatTokenCount(cacheTotal)}"
             } else {
                 ""
             }
             Text(
-                text = "вход ${UsageCalculator.formatTokenCount(row.inputTokens)} / выход ${
+                text = "输入 ${UsageCalculator.formatTokenCount(row.inputTokens)} / 输出 ${
                     UsageCalculator.formatTokenCount(row.outputTokens)
-                }$cachePart • всего ${UsageCalculator.formatTokenCount(row.totalTokens)}",
+                }$cachePart • 总计 ${UsageCalculator.formatTokenCount(row.totalTokens)}",
                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

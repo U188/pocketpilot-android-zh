@@ -226,7 +226,7 @@ class SettingsViewModel(
             serverAdminFlow.update {
                 it.copy(
                     isRunningAction = true,
-                    statusMessage = "Обновление OpenCode…",
+                    statusMessage = "正在更新 OpenCode…",
                     isError = false,
                 )
             }
@@ -241,7 +241,7 @@ class SettingsViewModel(
                 serverAdminFlow.update {
                     it.copy(
                         isRunningAction = false,
-                        statusMessage = "OpenCode обновлён и запущен на 127.0.0.1:${connected.profile.openCodePort}",
+                        statusMessage = "OpenCode 已更新并运行于 127.0.0.1:${connected.profile.openCodePort}",
                         isError = false,
                     )
                 }
@@ -251,7 +251,7 @@ class SettingsViewModel(
                 serverAdminFlow.update {
                     it.copy(
                         isRunningAction = false,
-                        statusMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "Ошибка обновления OpenCode"),
+                        statusMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "更新 OpenCode 失败"),
                         isError = true,
                     )
                 }
@@ -265,7 +265,7 @@ class SettingsViewModel(
             serverAdminFlow.update {
                 it.copy(
                     isRunningAction = true,
-                    statusMessage = "Перезапуск службы opencode-serve…",
+                    statusMessage = "正在重启 opencode-serve 服务…",
                     isError = false,
                 )
             }
@@ -280,7 +280,7 @@ class SettingsViewModel(
                 serverAdminFlow.update {
                     it.copy(
                         isRunningAction = false,
-                        statusMessage = "Служба opencode-serve перезапущена",
+                        statusMessage = "opencode-serve 服务已重启",
                         isError = false,
                     )
                 }
@@ -290,7 +290,7 @@ class SettingsViewModel(
                 serverAdminFlow.update {
                     it.copy(
                         isRunningAction = false,
-                        statusMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "Не удалось перезапустить службу"),
+                        statusMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "无法重启服务"),
                         isError = true,
                     )
                 }
@@ -305,7 +305,7 @@ class SettingsViewModel(
             serverAdminFlow.update {
                 it.copy(
                     isRunningAction = true,
-                    statusMessage = "Остановка службы opencode-serve…",
+                    statusMessage = "正在停止 opencode-serve 服务…",
                     isError = false,
                 )
             }
@@ -318,7 +318,7 @@ class SettingsViewModel(
                 serverAdminFlow.update {
                     it.copy(
                         isRunningAction = false,
-                        statusMessage = "Служба opencode-serve остановлена",
+                        statusMessage = "opencode-serve 服务已停止",
                         isError = false,
                     )
                 }
@@ -328,7 +328,7 @@ class SettingsViewModel(
                 serverAdminFlow.update {
                     it.copy(
                         isRunningAction = false,
-                        statusMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "Не удалось остановить службу"),
+                        statusMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "无法停止服务"),
                         isError = true,
                     )
                 }
@@ -343,7 +343,7 @@ class SettingsViewModel(
             serverAdminFlow.update {
                 it.copy(
                     isRunningAction = true,
-                    statusMessage = "Удаление службы opencode-serve…",
+                    statusMessage = "正在删除 opencode-serve 服务…",
                     isError = false,
                 )
             }
@@ -357,7 +357,7 @@ class SettingsViewModel(
                 serverAdminFlow.update {
                     it.copy(
                         isRunningAction = false,
-                        statusMessage = "Служба opencode-serve удалена с сервера",
+                        statusMessage = "已从服务器删除 opencode-serve 服务",
                         isError = false,
                     )
                 }
@@ -367,7 +367,7 @@ class SettingsViewModel(
                 serverAdminFlow.update {
                     it.copy(
                         isRunningAction = false,
-                        statusMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "Не удалось удалить службу"),
+                        statusMessage = OpenCodeConfigHelper.sanitizeLogs(err.message ?: "无法删除服务"),
                         isError = true,
                     )
                 }
@@ -399,7 +399,7 @@ class SettingsViewModel(
                 serverAdminFlow.update {
                     it.copy(
                         isLoadingLogs = false,
-                        serverLogs = "Не удалось получить логи (${connected.profile.name}): ${OpenCodeConfigHelper.sanitizeLogs(err.message.orEmpty())}",
+                        serverLogs = "无法获取日志（${connected.profile.name}）: ${OpenCodeConfigHelper.sanitizeLogs(err.message.orEmpty())}",
                     )
                 }
             }

@@ -79,7 +79,7 @@ object BiometricAuthHelper {
         runCatching {
             prompt.authenticate(builder.build())
         }.onFailure { err ->
-            onError(err.message ?: "Ошибка запуска биометрии")
+            onError(err.message ?: "启动生物识别失败")
         }
     }
 }

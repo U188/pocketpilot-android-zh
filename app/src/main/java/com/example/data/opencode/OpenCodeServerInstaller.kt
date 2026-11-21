@@ -221,7 +221,7 @@ class OpenCodeServerInstaller(
         timeoutSec: Long,
     ): SshExecResult = withContext(Dispatchers.IO) {
         val client = connectionManager.getActiveSshClient()
-            ?: throw IllegalStateException("SSH-соединение не активно")
+            ?: throw IllegalStateException("SSH 连接未激活")
 
         val outputBuilder = StringBuilder()
         var exitCode = -1
@@ -244,7 +244,7 @@ class OpenCodeServerInstaller(
         requireSystemd: Boolean = true,
         onLog: ((String) -> Unit)? = null,
     ): OpenCodeEnvInfo = withContext(Dispatchers.IO) {
-        onLog?.invoke("$ Проверка окружения сервера (ОС, архитектура, curl, systemd, права, место на диске)…")
+        onLog?.invoke("$ 正在检查服务器环境（操作系统、架构、curl、systemd、权限和磁盘空间）…")
         val script = """
             bash -lc '
             echo "OS=$(uname -s)"
@@ -350,23 +350,23 @@ class OpenCodeServerInstaller(
 
         if (requireSystemd) {
             if (!env.hasCurl) {
-                throw IllegalStateException("На сервере не установлен curl. Установите curl (например, sudo apt install -y curl) и повторите шаг.")
+                throw IllegalStateException("服务器未安装 curl。请先安装 curl（例如 sudo apt install -y curl），然后重试。")
             }
             if (!env.hasSystemd) {
-                throw IllegalStateException("На сервере не найден активный systemd (/run/systemd/system). Постоянная фоновая служба требует systemd, иначе процесс завершится при закрытии SSH.")
+                throw IllegalStateException("服务器未检测到活动的 systemd（/run/systemd/system）。持久后台服务需要 systemd，否则 SSH 关闭后进程会退出。")
             }
             if (env.freeSpaceMb in 0..99) {
-                throw IllegalStateException("Недостаточно свободного места на диске (${env.freeSpaceMb} МБ). Освободите минимум 100 МБ и повторите шаг.")
+                throw IllegalStateException("磁盘空间不足（${env.freeSpaceMb} MB）。请至少释放 100 MB 后重试。")
             }
         }
 
-        val freeLabel = if (env.freeSpaceMb >= 0) "${env.freeSpaceMb} МБ" else "н/д"
+        val freeLabel = if (env.freeSpaceMb >= 0) "${env.freeSpaceMb} MB" else "无"
         val permLabel = when {
             env.isRoot -> "root"
-            env.hasPasswordlessSudo -> "sudo (без пароля)"
+            env.hasPasswordlessSudo -> "sudo（免密码）"
             else -> "user-service + linger"
         }
-        onLog?.invoke("✓ ${env.osName} ${env.arch}, свободно $freeLabel, systemd=да, права: $permLabel")
+        onLog?.invoke("✓ ${env.osName} ${env.arch}，剩余空间 $freeLabel，systemd=可用，权限：$permLabel")
         env
     }
 
@@ -377,7 +377,7 @@ class OpenCodeServerInstaller(
     ): Pair<String, String?> = withContext(Dispatchers.IO) {
         if (!forceUpdate && !env.opencodePath.isNullOrBlank()) {
             val ver = env.opencodeVersion ?: readBinaryVersion(env.opencodePath)
-            onLog("✓ OpenCode уже установлен: ${env.opencodePath} (${ver ?: "версия не определена"}). Пропускаем повторную загрузку.")
+            onLog("✓ OpenCode 已安装：${env.opencodePath}（${ver ?: "版本未知"}），跳过重复下载。")
             return@withContext env.opencodePath to ver
         }
 
@@ -388,13 +388,13 @@ class OpenCodeServerInstaller(
             onLine = onLog,
         )
         if (installRes.exitCode != 0) {
-            throw IllegalStateException("Установщик OpenCode завершился с кодом ${installRes.exitCode}")
+            throw IllegalStateException("OpenCode 安装程序退出，代码 ${installRes.exitCode}")
         }
 
         val resolvedPath = resolveAbsoluteBinaryPath()
-            ?: throw IllegalStateException("Не удалось найти установленный бинарник OpenCode ни в \$HOME/.opencode/bin/opencode, ни в PATH.")
+            ?: throw IllegalStateException("在 \$HOME/.opencode/bin/opencode 和 PATH 中均未找到已安装的 OpenCode 可执行文件。")
         val version = readBinaryVersion(resolvedPath)
-        onLog("✓ Абсолютный путь бинарника: $resolvedPath" + (version?.let { " ($it)" } ?: ""))
+        onLog("✓ 可执行文件绝对路径：$resolvedPath" + (version?.let { " ($it)" } ?: ""))
         resolvedPath to version
     }
 
@@ -402,7 +402,7 @@ class OpenCodeServerInstaller(
         env: OpenCodeEnvInfo,
         onLog: (String) -> Unit,
     ) = withContext(Dispatchers.IO) {
-        onLog("$ Остановка временных служб (transient) и сиротских процессов opencode serve…")
+        onLog("$ 正在停止临时服务和遗留的 opencode serve 进程…")
         val stopSystemCmd = when {
             env.isRoot -> "systemctl stop opencode-serve 2>/dev/null || true; systemctl reset-failed opencode-serve 2>/dev/null || true"
             env.hasPasswordlessSudo -> "sudo -n systemctl stop opencode-serve 2>/dev/null || true; sudo -n systemctl reset-failed opencode-serve 2>/dev/null || true"
@@ -421,7 +421,7 @@ class OpenCodeServerInstaller(
             '
         """.trimIndent()
         execStreaming(script, timeoutSec = 25, onLine = onLog)
-        onLog("✓ Старые процессы и временные службы остановлены")
+        onLog("✓ 旧进程和临时服务已停止")
     }
 
     suspend fun installPersistentSystemdService(
@@ -433,7 +433,7 @@ class OpenCodeServerInstaller(
         onLog: (String) -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!env.hasSystemd) {
-            throw IllegalStateException("systemd недоступен на сервере — невозможно создать постоянную службу")
+            throw IllegalStateException("服务器上无法使用 systemd，不能创建持久服务")
         }
         val cleanPort = port.coerceIn(1, 65535)
         val useSystemScope = env.isRoot || env.hasPasswordlessSudo
@@ -456,12 +456,12 @@ class OpenCodeServerInstaller(
 
             if (useSystemScope) {
                 if (env.isRoot) {
-                    onLog("→ Загрузка /etc/opencode-serve.env по SFTP (chmod 600)…")
+                    onLog("→ 正在通过 SFTP 上传 /etc/opencode-serve.env（chmod 600）…")
                     sftpRepository.writeTextFile("/etc/opencode-serve.env", envContent, null, forceOverwrite = true)
                     sftpRepository.chmod("/etc/opencode-serve.env", 0x180)
                 } else {
                     val tmpEnv = "$cleanHome/.opencode-serve.env.tmp"
-                    onLog("→ Загрузка файла пароля по SFTP и перенос в /etc/opencode-serve.env (chmod 600)…")
+                    onLog("→ 正在通过 SFTP 上传密码文件并移动到 /etc/opencode-serve.env（chmod 600）…")
                     sftpRepository.writeTextFile(tmpEnv, envContent, null, forceOverwrite = true)
                     runCatching { sftpRepository.chmod(tmpEnv, 0x180) }
                     val mvRes = execStreaming(
@@ -471,13 +471,13 @@ class OpenCodeServerInstaller(
                         secretsToRedact = listOf(passwordSecret),
                     )
                     if (mvRes.exitCode != 0) {
-                        throw IllegalStateException("Не удалось установить /etc/opencode-serve.env (код ${mvRes.exitCode})")
+                        throw IllegalStateException("无法安装 /etc/opencode-serve.env（代码 ${mvRes.exitCode}）")
                     }
                 }
             } else {
                 val cfgDir = "$cleanHome/.config/opencode"
                 execStreaming("mkdir -p ${shellQuote(cfgDir)} && chmod 700 ${shellQuote(cfgDir)}", 15, null)
-                onLog("→ Загрузка $envFilePath по SFTP (chmod 600)…")
+                onLog("→ 正在通过 SFTP 上传 $envFilePath（chmod 600）…")
                 sftpRepository.writeTextFile(envFilePath!!, envContent, null, forceOverwrite = true)
                 runCatching { sftpRepository.chmod(envFilePath, 0x180) }
             }
@@ -485,7 +485,7 @@ class OpenCodeServerInstaller(
             if (profileId != null) {
                 secretStore?.saveOpenCodeServerAuth(profileId, effectiveUser, passwordSecret)
             }
-            onLog("✓ Защита паролем (Basic Auth) настроена и сохранена в Android Keystore")
+            onLog("✓ 已配置 Basic Auth 密码保护，并保存到 Android Keystore")
         } else {
             if (profileId != null) {
                 secretStore?.clearOpenCodeServerAuth(profileId)
@@ -512,7 +512,7 @@ class OpenCodeServerInstaller(
         if (useSystemScope) {
             val targetPath = "/etc/systemd/system/opencode-serve.service"
             if (env.isRoot) {
-                onLog("→ Загрузка $targetPath по SFTP…")
+                onLog("→ 正在通过 SFTP 上传 $targetPath…")
                 sftpRepository.writeTextFile(targetPath, unitContent, null, forceOverwrite = true)
                 val res = execStreaming(
                     "systemctl daemon-reload && systemctl enable --now opencode-serve && systemctl restart opencode-serve",
@@ -521,11 +521,11 @@ class OpenCodeServerInstaller(
                     secretsToRedact = redactList,
                 )
                 if (res.exitCode != 0) {
-                    throw IllegalStateException("systemctl не смог запустить opencode-serve (код ${res.exitCode})")
+                    throw IllegalStateException("systemctl 无法启动 opencode-serve（代码 ${res.exitCode}）")
                 }
             } else {
                 val stagingPath = "$cleanHome/.opencode-serve.service.tmp"
-                onLog("→ Загрузка unit-файла по SFTP и установка в $targetPath через sudo…")
+                onLog("→ 正在通过 SFTP 上传 unit 文件，并通过 sudo 安装到 $targetPath…")
                 sftpRepository.writeTextFile(stagingPath, unitContent, null, forceOverwrite = true)
                 val res = execStreaming(
                     "sudo -n mv ${shellQuote(stagingPath)} $targetPath && " +
@@ -538,16 +538,16 @@ class OpenCodeServerInstaller(
                     secretsToRedact = redactList,
                 )
                 if (res.exitCode != 0) {
-                    throw IllegalStateException("sudo systemctl не смог запустить opencode-serve (код ${res.exitCode})")
+                    throw IllegalStateException("sudo systemctl 无法启动 opencode-serve（代码 ${res.exitCode}）")
                 }
             }
-            onLog("✓ Постоянная системная служба opencode-serve включена (127.0.0.1:$cleanPort)")
+            onLog("✓ 持久化系统服务 opencode-serve 已启用（127.0.0.1:$cleanPort）")
             return@withContext false // isUserService = false
         } else {
             val userUnitDir = "$cleanHome/.config/systemd/user"
             val userUnitPath = "$userUnitDir/opencode-serve.service"
             execStreaming("mkdir -p ${shellQuote(userUnitDir)}", timeoutSec = 15, onLine = null)
-            onLog("→ Загрузка user-службы $userUnitPath по SFTP…")
+            onLog("→ 正在通过 SFTP 上传用户服务 $userUnitPath…")
             sftpRepository.writeTextFile(userUnitPath, unitContent, null, forceOverwrite = true)
 
             val lingerRes = execStreaming(
@@ -557,7 +557,7 @@ class OpenCodeServerInstaller(
                 secretsToRedact = redactList,
             )
             if (lingerRes.exitCode == 0) {
-                onLog("✓ loginctl enable-linger выполнен для ${env.userName}")
+                onLog("✓ 已为 ${env.userName} 执行 loginctl enable-linger")
             }
 
             val res = execStreaming(
@@ -567,9 +567,9 @@ class OpenCodeServerInstaller(
                 secretsToRedact = redactList,
             )
             if (res.exitCode != 0) {
-                throw IllegalStateException("systemctl --user не смог запустить opencode-serve (код ${res.exitCode}). Убедитесь, что активна user systemd сессия или есть доступ root/sudo.")
+                throw IllegalStateException("systemctl --user 无法启动 opencode-serve（代码 ${res.exitCode}）。请确认用户 systemd 会话已启用，或具有 root/sudo 权限。")
             }
-            onLog("✓ Постоянная user-служба opencode-serve включена с linger (127.0.0.1:$cleanPort)")
+            onLog("✓ 已启用带 linger 的持久化用户服务 opencode-serve（127.0.0.1:$cleanPort）")
             return@withContext true // isUserService = true
         }
     }
@@ -598,22 +598,22 @@ class OpenCodeServerInstaller(
 
         if (!initial.serviceActive || !initial.portListening || !initial.sessionJsonOk) {
             val detail = buildString {
-                if (!initial.serviceActive) append("служба не active (${initial.serviceActiveDetail}); ")
-                if (!initial.portListening) append("порт 127.0.0.1:$cleanPort не слушается; ")
-                if (!initial.sessionJsonOk) append("GET /session не ответил JSON (${initial.sessionJsonDetail})")
+                if (!initial.serviceActive) append("服务未处于 active 状态（${initial.serviceActiveDetail}）；")
+                if (!initial.portListening) append("端口 127.0.0.1:$cleanPort 未在监听；")
+                if (!initial.sessionJsonOk) append("GET /session 未返回 JSON（${initial.sessionJsonDetail}）")
             }
-            throw IllegalStateException("Автопроверка не пройдена: $detail")
+            throw IllegalStateException("自动检查未通过：$detail")
         }
 
         if (!verifyPersistence) {
             return@withContext initial
         }
 
-        onLog("$ Проверка устойчивости: выполняем systemctl restart opencode-serve…")
+        onLog("$ 正在检查稳定性：执行 systemctl restart opencode-serve…")
         val restartCmd = buildSystemctlCommand(env, isUserService, "restart")
         val restartRes = execStreaming(restartCmd, timeoutSec = 30, onLine = onLog, secretsToRedact = redactList)
         if (restartRes.exitCode != 0) {
-            throw IllegalStateException("Тест устойчивости (systemctl restart) завершился с кодом ${restartRes.exitCode}")
+            throw IllegalStateException("稳定性测试（systemctl restart）退出，代码 ${restartRes.exitCode}")
         }
 
         val afterRestart = runTripleVerification(
@@ -626,13 +626,13 @@ class OpenCodeServerInstaller(
         )
         val survived = afterRestart.serviceActive && afterRestart.portListening && afterRestart.sessionJsonOk
         if (!survived) {
-            throw IllegalStateException("После systemctl restart сервер не поднялся: ${afterRestart.sessionJsonDetail.ifBlank { afterRestart.serviceActiveDetail }}")
+            throw IllegalStateException("systemctl restart 后服务器未能启动：${afterRestart.sessionJsonDetail.ifBlank { afterRestart.serviceActiveDetail }}")
         }
-        onLog("✓ Служба пережила перезапуск и готова к автозапуску после перезагрузки VPS")
+        onLog("✓ 服务重启后运行正常，并已配置为 VPS 重启后自动启动")
 
         afterRestart.copy(
             restartSurvived = true,
-            restartSurvivedDetail = "Перезапуск пройден — после перезагрузки VPS служба стартует сама",
+            restartSurvivedDetail = "重启检查通过，VPS 重启后服务会自动启动",
         )
     }
 
@@ -644,13 +644,13 @@ class OpenCodeServerInstaller(
         onLog: (String) -> Unit,
     ) = withContext(Dispatchers.IO) {
         if (!env.hasSystemd || !env.hasPersistentUnit) {
-            throw IllegalStateException("Постоянная systemd-служба opencode-serve ещё не настроена. Нажмите «Установить и настроить OpenCode».")
+            throw IllegalStateException("尚未配置持久化 systemd 服务 opencode-serve。请点击“安装并配置 OpenCode”。")
         }
         val cmd = buildSystemctlCommand(env, env.isUserService, "start")
         onLog("$ $cmd")
         val res = execStreaming(cmd, timeoutSec = 30, onLine = onLog)
         if (res.exitCode != 0) {
-            throw IllegalStateException("Не удалось запустить службу opencode-serve (код ${res.exitCode})")
+            throw IllegalStateException("无法启动 opencode-serve 服务（代码 ${res.exitCode}）")
         }
         verifyInstallation(
             profileId = profileId,
@@ -672,9 +672,9 @@ class OpenCodeServerInstaller(
         onLog("$ $cmd")
         val res = execStreaming(cmd, timeoutSec = 25, onLine = onLog)
         if (res.exitCode != 0) {
-            throw IllegalStateException("Не удалось остановить службу opencode-serve (код ${res.exitCode})")
+            throw IllegalStateException("无法停止 opencode-serve 服务（代码 ${res.exitCode}）")
         }
-        onLog("✓ Служба opencode-serve остановлена")
+        onLog("✓ opencode-serve 服务已停止")
     }
 
     suspend fun restartOpenCodeServer(
@@ -685,13 +685,13 @@ class OpenCodeServerInstaller(
     ) = withContext(Dispatchers.IO) {
         val env = inspectEnvironment(openCodePort = port, requireSystemd = true)
         if (!env.hasPersistentUnit) {
-            throw IllegalStateException("Постоянная служба opencode-serve не установлена. Используйте «Починить» для создания службы.")
+            throw IllegalStateException("尚未安装持久化 opencode-serve 服务。请使用“修复”创建服务。")
         }
         val cmd = buildSystemctlCommand(env, env.isUserService, "restart")
         onLog("$ $cmd")
         val res = execStreaming(cmd, timeoutSec = 30, onLine = onLog)
         if (res.exitCode != 0) {
-            throw IllegalStateException("Не удалось перезапустить opencode-serve (код ${res.exitCode})")
+            throw IllegalStateException("无法重启 opencode-serve（代码 ${res.exitCode}）")
         }
         val ready = waitForServerReadyAfterRestart(
             profileId = profileId,
@@ -700,10 +700,10 @@ class OpenCodeServerInstaller(
             onProgress = onLog,
         )
         if (!ready.serviceActive) {
-            throw IllegalStateException("Служба opencode-serve не перешла в active: ${ready.detail}")
+            throw IllegalStateException("opencode-serve 未进入 active 状态：${ready.detail}")
         }
         if (!ready.serverAlive) {
-            throw IllegalStateException("Сервер OpenCode не ответил на /session за 40 с: ${ready.detail}")
+            throw IllegalStateException("OpenCode 服务器在 40 秒内未响应 /session：${ready.detail}")
         }
     }
 
@@ -717,7 +717,7 @@ class OpenCodeServerInstaller(
     ): ServiceRestartCheckResult = withContext(Dispatchers.IO) {
         val env = inspectEnvironment(openCodePort = port, requireSystemd = true)
         if (!env.hasPersistentUnit) {
-            throw IllegalStateException("Постоянная служба opencode-serve не установлена. Используйте «Починить» для создания службы.")
+            throw IllegalStateException("尚未安装持久化 opencode-serve 服务。请使用“修复”创建服务。")
         }
         val cmd = buildSystemctlCommand(env, env.isUserService, "restart")
         onLog?.invoke("$ $cmd")
@@ -727,7 +727,7 @@ class OpenCodeServerInstaller(
                 serviceActive = false,
                 isUserService = env.isUserService,
                 stateText = "error(${res.exitCode})",
-                detail = "systemctl restart завершился с кодом ${res.exitCode}",
+                detail = "systemctl restart 退出，代码 ${res.exitCode}",
             )
         }
 
@@ -740,7 +740,7 @@ class OpenCodeServerInstaller(
                     serviceActive = true,
                     isUserService = env.isUserService,
                     stateText = stateText,
-                    detail = "Служба opencode-serve активна (active)",
+                    detail = "opencode-serve 服务处于活动状态（active）",
                 )
             }
             if (stateText == "failed" || stateText == "inactive") {
@@ -748,7 +748,7 @@ class OpenCodeServerInstaller(
                     serviceActive = false,
                     isUserService = env.isUserService,
                     stateText = stateText,
-                    detail = "Служба opencode-serve в состоянии $stateText после перезапуска",
+                    detail = "重启后 opencode-serve 状态为 $stateText",
                 )
             }
             if (idx < 3) delay(1_500L)
@@ -758,7 +758,7 @@ class OpenCodeServerInstaller(
             serviceActive = stateText == "active",
             isUserService = env.isUserService,
             stateText = stateText,
-            detail = "Служба opencode-serve не перешла в active (статус: $stateText)",
+            detail = "opencode-serve 未进入 active 状态（当前状态：$stateText）",
         )
     }
 
@@ -784,7 +784,7 @@ class OpenCodeServerInstaller(
         }
 
         var lastServiceState = "active"
-        var lastDetail = "Нет ответа от /session"
+        var lastDetail = "/session 无响应"
 
         for (attempt in 1..RESTART_POLL_MAX_ATTEMPTS) {
             val elapsedSec = (attempt - 1) * (RESTART_POLL_INTERVAL_MS / 1000L)
@@ -797,7 +797,7 @@ class OpenCodeServerInstaller(
                     return@withContext ServerReadyCheckResult(
                         serviceActive = false,
                         serverAlive = false,
-                        detail = "Служба opencode-serve остановилась (статус: $svcState)",
+                        detail = "opencode-serve 已停止（状态：$svcState）",
                         activeTunnelPort = tunnelPort,
                     )
                 }
@@ -805,7 +805,7 @@ class OpenCodeServerInstaller(
 
             // Ensure tunnel port is available
             if (tunnelPort == null) {
-                onProgress?.invoke("Попытка $attempt/$RESTART_POLL_MAX_ATTEMPTS (${elapsedSec} с): пересоздание SSH-туннеля…")
+                onProgress?.invoke("第 $attempt/$RESTART_POLL_MAX_ATTEMPTS 次尝试（${elapsedSec} 秒）：正在重建 SSH 隧道…")
                 tunnelPort = runCatching { connectionManager.recreateLocalTunnel() }.getOrNull()
             }
 
@@ -818,7 +818,7 @@ class OpenCodeServerInstaller(
                 lastDetail = probe.detail
 
                 if (probe.alive) {
-                    onProgress?.invoke("Сервер отвечает: ${probe.detail}")
+                    onProgress?.invoke("服务器已响应：${probe.detail}")
                     return@withContext ServerReadyCheckResult(
                         serviceActive = lastServiceState == "active" || lastServiceState == "activating",
                         serverAlive = true,
@@ -828,7 +828,7 @@ class OpenCodeServerInstaller(
                 }
 
                 if (probe.isConnectionError) {
-                    onProgress?.invoke("Попытка $attempt/$RESTART_POLL_MAX_ATTEMPTS (${elapsedSec} с): обрыв туннеля, пересоздаём…")
+                    onProgress?.invoke("第 $attempt/$RESTART_POLL_MAX_ATTEMPTS 次尝试（${elapsedSec} 秒）：隧道已断开，正在重建…")
                     val rebuiltPort = runCatching { connectionManager.recreateLocalTunnel() }.getOrNull()
                     if (rebuiltPort != null) {
                         tunnelPort = rebuiltPort
@@ -839,7 +839,7 @@ class OpenCodeServerInstaller(
                         )
                         lastDetail = retryProbe.detail
                         if (retryProbe.alive) {
-                            onProgress?.invoke("Сервер отвечает: ${retryProbe.detail}")
+                            onProgress?.invoke("服务器已响应：${retryProbe.detail}")
                             return@withContext ServerReadyCheckResult(
                                 serviceActive = lastServiceState == "active" || lastServiceState == "activating",
                                 serverAlive = true,
@@ -849,11 +849,11 @@ class OpenCodeServerInstaller(
                         }
                     }
                 } else {
-                    onProgress?.invoke("Попытка $attempt/$RESTART_POLL_MAX_ATTEMPTS (${elapsedSec} с): ${probe.detail}")
+                    onProgress?.invoke("第 $attempt/$RESTART_POLL_MAX_ATTEMPTS 次尝试（${elapsedSec} 秒）：${probe.detail}")
                 }
             } else {
-                lastDetail = "SSH-туннель недоступен"
-                onProgress?.invoke("Попытка $attempt/$RESTART_POLL_MAX_ATTEMPTS (${elapsedSec} с): ожидание SSH-туннеля…")
+                lastDetail = "SSH 隧道不可用"
+                onProgress?.invoke("第 $attempt/$RESTART_POLL_MAX_ATTEMPTS 次尝试（${elapsedSec} 秒）：正在等待 SSH 隧道…")
             }
 
             if (attempt < RESTART_POLL_MAX_ATTEMPTS) {
@@ -912,7 +912,7 @@ class OpenCodeServerInstaller(
     ) = withContext(Dispatchers.IO) {
         val env = inspectEnvironment(openCodePort = port, requireSystemd = false)
         val cleanHome = env.homeDir.trimEnd('/').ifBlank { "/root" }
-        onLog("$ Удаление службы opencode-serve…")
+        onLog("$ 正在删除 opencode-serve 服务…")
 
         val sysRm = when {
             env.isRoot ->
@@ -936,7 +936,7 @@ class OpenCodeServerInstaller(
         if (profileId != null) {
             secretStore?.clearOpenCodeServerAuth(profileId)
         }
-        onLog("✓ Служба opencode-serve удалена")
+        onLog("✓ opencode-serve 服务已删除")
     }
 
     suspend fun fetchServerLogs(
@@ -991,7 +991,7 @@ class OpenCodeServerInstaller(
                 root.optJSONArray("data")?.length()
             }.getOrNull()
             if (count != null) {
-                "найдено моделей: $count"
+                "已发现模型：$count 个"
             } else {
                 "HTTP ${response.code} OK"
             }
@@ -1030,7 +1030,7 @@ class OpenCodeServerInstaller(
         )
         runCatching { sftpRepository.chmod(configPath, 0x180) }
 
-        onLog?.invoke("✓ Конфигурация сохранена в ~/.config/opencode/opencode.json (chmod 600)")
+        onLog?.invoke("✓ 配置已保存到 ~/.config/opencode/opencode.json（chmod 600）")
         restartOpenCodeServer(profileId, port, localTunnelPort, onLog ?: {})
     }
 
@@ -1067,9 +1067,9 @@ class OpenCodeServerInstaller(
             val exposedPublicly = ssOut.contains("0.0.0.0:$port") || ssOut.contains("*:$port") || ssOut.contains("[::]:$port")
             portListening = loopbackBound && !exposedPublicly
             portListeningDetail = when {
-                exposedPublicly -> "Внимание: обнаружен публичный сокет ($ssOut)"
-                loopbackBound -> "127.0.0.1:$port (только локально)"
-                else -> "порт $port не слушается"
+                exposedPublicly -> "警告：检测到公开监听的套接字（$ssOut）"
+                loopbackBound -> "127.0.0.1:$port（仅限本机访问）"
+                else -> "端口 $port 未在监听"
             }
 
             if (activePort == null) {
@@ -1094,13 +1094,13 @@ class OpenCodeServerInstaller(
                 }
             } else {
                 sessionJsonOk = false
-                sessionJsonDetail = "SSH-туннель не активен"
+                sessionJsonDetail = "SSH 隧道未启用"
             }
 
             if (serviceActive && portListening && sessionJsonOk) {
-                onLog("✓ Проверка 1/3: служба opencode-serve — active")
-                onLog("✓ Проверка 2/3: ss -ltn — $portListeningDetail")
-                onLog("✓ Проверка 3/3: GET /session — $sessionJsonDetail")
+                onLog("✓ 检查 1/3：opencode-serve 服务处于 active 状态")
+                onLog("✓ 检查 2/3：ss -ltn — $portListeningDetail")
+                onLog("✓ 检查 3/3：GET /session — $sessionJsonDetail")
                 return OpenCodeVerificationReport(
                     serviceActive = true,
                     serviceActiveDetail = "active",
@@ -1148,9 +1148,9 @@ class OpenCodeServerInstaller(
                     alive = treat401AsAlive,
                     isConnectionError = false,
                     detail = if (treat401AsAlive) {
-                        "HTTP 401 (сервер запущен, включена Basic Auth)"
+                        "HTTP 401（服务器已启动，已启用 Basic Auth）"
                     } else {
-                        "HTTP 401 (требуется Basic Auth)"
+                        "HTTP 401（需要 Basic Auth）"
                     },
                     httpCode = 401,
                 )
@@ -1177,7 +1177,7 @@ class OpenCodeServerInstaller(
                 SessionProbeResult(
                     alive = false,
                     isConnectionError = false,
-                    detail = "Ответ не является JSON",
+                    detail = "响应不是 JSON",
                     httpCode = resp.code,
                 )
             }
@@ -1186,7 +1186,7 @@ class OpenCodeServerInstaller(
         SessionProbeResult(
             alive = false,
             isConnectionError = true,
-            detail = err.message ?: "Нет соединения",
+            detail = err.message ?: "无连接",
         )
     }
 
@@ -1231,7 +1231,7 @@ class OpenCodeServerInstaller(
         secretsToRedact: List<String> = emptyList(),
     ): SshExecResult = withContext(Dispatchers.IO) {
         val client = connectionManager.getActiveSshClient()
-            ?: throw IllegalStateException("SSH-соединение не активно")
+            ?: throw IllegalStateException("SSH 连接未激活")
 
         val outputBuilder = StringBuilder()
         var exitCode = -1

@@ -335,7 +335,7 @@ fun CodeEditorScreen(
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        text = "${stringResource(R.string.editor_code_word_wrap)}: ${if (uiState.wordWrap) "Вкл" else "Выкл"}",
+                                        text = "${stringResource(R.string.editor_code_word_wrap)}：${if (uiState.wordWrap) "开" else "关"}",
                                     )
                                 },
                                 leadingIcon = {

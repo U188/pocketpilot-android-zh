@@ -33,7 +33,7 @@ object ProfileBackupCrypto {
     private val secureRandom = SecureRandom()
 
     fun encrypt(plaintextJson: String, password: String): String {
-        require(password.length >= 4) { "Пароль для файла должен содержать не менее 4 символов" }
+        require(password.length >= 4) { "文件密码至少需要 4 个字符" }
 
         val salt = ByteArray(SALT_BYTES).also { secureRandom.nextBytes(it) }
         val iv = ByteArray(IV_BYTES).also { secureRandom.nextBytes(it) }
@@ -61,27 +61,27 @@ object ProfileBackupCrypto {
     }
 
     fun decrypt(encryptedEnvelopeJson: String, password: String): String {
-        require(password.isNotEmpty()) { "Введите пароль для расшифровки файла" }
+        require(password.isNotEmpty()) { "请输入密码以解密文件" }
 
         val envelope = runCatching { JSONObject(encryptedEnvelopeJson.trim()) }.getOrElse {
-            throw IllegalArgumentException("Некорректный формат файла резервной копии")
+            throw IllegalArgumentException("备份文件格式无效")
         }
         val format = envelope.optString("format")
         val version = envelope.optInt("version", -1)
         if (format != FORMAT_ID || version != FORMAT_VERSION) {
-            throw IllegalArgumentException("Неподдерживаемый формат файла резервной копии")
+            throw IllegalArgumentException("不支持的备份文件格式")
         }
 
         val iterations = envelope.optInt("iterations", PBKDF2_ITERATIONS).coerceIn(10_000, 1_000_000)
         val decoder = Base64.getDecoder()
         val salt = runCatching { decoder.decode(envelope.getString("salt")) }.getOrElse {
-            throw IllegalArgumentException("Повреждены параметры шифрования (salt)")
+            throw IllegalArgumentException("加密参数（salt）已损坏")
         }
         val iv = runCatching { decoder.decode(envelope.getString("iv")) }.getOrElse {
-            throw IllegalArgumentException("Повреждены параметры шифрования (iv)")
+            throw IllegalArgumentException("加密参数（iv）已损坏")
         }
         val ciphertext = runCatching { decoder.decode(envelope.getString("ciphertext")) }.getOrElse {
-            throw IllegalArgumentException("Повреждены зашифрованные данные")
+            throw IllegalArgumentException("加密数据已损坏")
         }
 
         val keyBytes = deriveKey(password, salt, iterations)
@@ -91,9 +91,9 @@ object ProfileBackupCrypto {
             val plainBytes = cipher.doFinal(ciphertext)
             return String(plainBytes, StandardCharsets.UTF_8)
         } catch (_: AEADBadTagException) {
-            throw IllegalArgumentException("Неверный пароль или повреждённый файл резервной копии")
+            throw IllegalArgumentException("密码错误或备份文件已损坏")
         } catch (t: Throwable) {
-            throw IllegalArgumentException("Не удалось расшифровать файл: ${t.message ?: "проверьте пароль"}")
+            throw IllegalArgumentException("无法解密文件: ${t.message ?: "请检查密码"}")
         } finally {
             keyBytes.fill(0)
         }

@@ -133,7 +133,7 @@ class GitViewModel(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        errorMessage = err.message ?: "Не удалось загрузить статус Git",
+                        errorMessage = err.message ?: "无法加载 Git 状态",
                     )
                 }
             }
@@ -142,16 +142,16 @@ class GitViewModel(
 
     fun initRepository() {
         val dir = _uiState.value.targetDirectory.ifBlank { return }
-        runGitAction("Инициализация Git…") {
+        runGitAction("正在初始化 Git…") {
             gitRepository.initRepository(dir)
-            _messages.tryEmit("Git-репозиторий инициализирован")
+            _messages.tryEmit("Git 仓库已初始化")
             refreshInternal(dir)
         }
     }
 
     fun stageFile(change: GitFileChange) {
         val root = activeRepoRoot() ?: return
-        runGitAction("Индексация…") {
+        runGitAction("正在暂存…") {
             gitRepository.stageFile(root, change.path)
             refreshInternal(root)
         }
@@ -159,7 +159,7 @@ class GitViewModel(
 
     fun unstageFile(change: GitFileChange) {
         val root = activeRepoRoot() ?: return
-        runGitAction("Снятие из индекса…") {
+        runGitAction("正在取消暂存…") {
             gitRepository.unstageFile(root, change.path)
             refreshInternal(root)
         }
@@ -167,7 +167,7 @@ class GitViewModel(
 
     fun stageAll() {
         val root = activeRepoRoot() ?: return
-        runGitAction("Добавление всех файлов…") {
+        runGitAction("正在暂存所有文件…") {
             gitRepository.stageAll(root)
             refreshInternal(root)
         }
@@ -175,7 +175,7 @@ class GitViewModel(
 
     fun unstageAll() {
         val root = activeRepoRoot() ?: return
-        runGitAction("Очистка индекса…") {
+        runGitAction("正在清空暂存区…") {
             gitRepository.unstageAll(root)
             refreshInternal(root)
         }
@@ -183,9 +183,9 @@ class GitViewModel(
 
     fun discardFile(change: GitFileChange) {
         val root = activeRepoRoot() ?: return
-        runGitAction("Откат изменений…") {
+        runGitAction("正在放弃更改…") {
             gitRepository.discardFile(root, change)
-            _messages.tryEmit("Откат выполнен: ${change.path}")
+            _messages.tryEmit("已放弃更改：${change.path}")
             refreshInternal(root)
         }
     }
@@ -211,17 +211,17 @@ class GitViewModel(
         val state = _uiState.value
         val msg = state.commitMessage.trim()
         if (msg.isBlank()) {
-            _messages.tryEmit("Введите сообщение коммита")
+            _messages.tryEmit("请输入提交说明")
             return
         }
         val autoStageAll = state.status.stagedFiles.isEmpty() &&
             (state.status.unstagedFiles.isNotEmpty() || state.status.untrackedFiles.isNotEmpty())
         if (state.status.stagedFiles.isEmpty() && !autoStageAll && !state.amendLastCommit) {
-            _messages.tryEmit("Нет изменений для коммита")
+            _messages.tryEmit("没有可提交的更改")
             return
         }
 
-        val label = if (andPush) "Коммит и Push…" else "Создание коммита…"
+        val label = if (andPush) "正在提交并推送…" else "正在创建提交…"
         runGitAction(label) {
             gitRepository.commit(
                 repoRoot = root,
@@ -237,9 +237,9 @@ class GitViewModel(
                     currentBranch = summary.branchName,
                     hasUpstream = !summary.upstreamName.isNullOrBlank(),
                 )
-                _messages.tryEmit("Коммит создан и отправлен (push)")
+                _messages.tryEmit("提交已创建并推送")
             } else {
-                _messages.tryEmit("Коммит создан")
+                _messages.tryEmit("提交已创建")
             }
             refreshInternal(root)
         }
@@ -249,7 +249,7 @@ class GitViewModel(
         val root = activeRepoRoot() ?: return
         runGitAction("Git fetch…") {
             gitRepository.fetch(root)
-            _messages.tryEmit("Состояние remote обновлено")
+            _messages.tryEmit("远程状态已刷新")
             refreshInternal(root)
         }
     }
@@ -258,7 +258,7 @@ class GitViewModel(
         val root = activeRepoRoot() ?: return
         runGitAction("Git pull…") {
             val out = gitRepository.pull(root)
-            val firstLine = out.lineSequence().firstOrNull { it.isNotBlank() } ?: "Pull выполнен"
+            val firstLine = out.lineSequence().firstOrNull { it.isNotBlank() } ?: "拉取完成"
             _messages.tryEmit(firstLine.take(120))
             refreshInternal(root)
         }
@@ -273,7 +273,7 @@ class GitViewModel(
                 currentBranch = summary.branchName,
                 hasUpstream = !summary.upstreamName.isNullOrBlank(),
             )
-            _messages.tryEmit("Изменения отправлены на сервер (push)")
+            _messages.tryEmit("更改已推送到服务器")
             refreshInternal(root)
         }
     }
@@ -298,7 +298,7 @@ class GitViewModel(
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 _uiState.update { it.copy(isLoadingMeta = false) }
-                _messages.tryEmit(err.message ?: "Не удалось загрузить ветки и историю")
+                _messages.tryEmit(err.message ?: "无法加载分支和历史记录")
             }
         }
     }
@@ -306,9 +306,9 @@ class GitViewModel(
     fun switchBranch(branch: GitBranchEntry) {
         val root = activeRepoRoot() ?: return
         if (branch.isCurrent) return
-        runGitAction("Переключение на ${branch.name}…") {
+        runGitAction("正在切换到 ${branch.name}…") {
             gitRepository.switchBranch(root, branch.name, branch.isRemote)
-            _messages.tryEmit("Активная ветка: ${branch.name}")
+            _messages.tryEmit("当前分支：${branch.name}")
             refreshInternal(root)
             loadBranchesAndLog()
         }
@@ -318,12 +318,12 @@ class GitViewModel(
         val root = activeRepoRoot() ?: return
         val clean = branchName.trim()
         if (!GitParser.isValidBranchName(clean)) {
-            _messages.tryEmit("Некорректное имя ветки (без пробелов и спецсимволов)")
+            _messages.tryEmit("分支名称无效（不能包含空格或特殊字符）")
             return
         }
-        runGitAction("Создание ветки $clean…") {
+        runGitAction("正在创建分支 $clean…") {
             gitRepository.createAndSwitchBranch(root, clean)
-            _messages.tryEmit("Создана и выбрана ветка $clean")
+            _messages.tryEmit("已创建并切换到分支 $clean")
             refreshInternal(root)
             loadBranchesAndLog()
         }
@@ -368,7 +368,7 @@ class GitViewModel(
                     state.copy(
                         diffPreview = state.diffPreview?.copy(
                             isLoading = false,
-                            error = err.message ?: "Не удалось загрузить diff",
+                            error = err.message ?: "无法加载差异",
                         ),
                     )
                 }
@@ -409,7 +409,7 @@ class GitViewModel(
                     state.copy(
                         diffPreview = state.diffPreview?.copy(
                             isLoading = false,
-                            error = err.message ?: "Не удалось загрузить diff коммита",
+                            error = err.message ?: "无法加载提交差异",
                         ),
                     )
                 }
@@ -438,7 +438,7 @@ class GitViewModel(
                 block()
             }.onFailure { err ->
                 if (err is CancellationException) throw err
-                val msg = err.message ?: "Ошибка Git-операции"
+                val msg = err.message ?: "Git 操作失败"
                 _uiState.update { it.copy(errorMessage = msg) }
                 _messages.tryEmit(msg.take(160))
             }

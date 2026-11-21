@@ -136,7 +136,7 @@ class OpenCodeApiClient(
 
     private fun requireBaseUrl(): Pair<Int, String> {
         val port = connectionManager.getActiveLocalTunnelPort()
-            ?: throw IllegalStateException("SSH-туннель к OpenCode не активен")
+            ?: throw IllegalStateException("连接 OpenCode 的 SSH 隧道未启用")
         return port to "http://127.0.0.1:$port"
     }
 
@@ -177,7 +177,7 @@ class OpenCodeApiClient(
         }
         val body = executeJsonRequest("POST", "$baseUrl/session", payload)
         OpenCodeJsonParser.parseSession(JSONObject(body))
-            ?: throw IllegalStateException("Сервер OpenCode вернул пустую сессию")
+            ?: throw IllegalStateException("OpenCode 服务器返回了空会话")
     }
 
     suspend fun renameSession(sessionId: String, title: String): OpenCodeSession =
@@ -202,7 +202,7 @@ class OpenCodeApiClient(
             }
             val body = executeJsonRequest("POST", "$baseUrl/session/$sessionId/fork", payload)
             OpenCodeJsonParser.parseSession(JSONObject(body))
-                ?: throw IllegalStateException("Не удалось выполнить форк сессии")
+                ?: throw IllegalStateException("无法分叉会话")
         }
 
     suspend fun getMessages(
@@ -386,7 +386,7 @@ class OpenCodeApiClient(
                     attempt = 0
                     emit(SseConnectionStatus.CONNECTED to null)
                     val bodyStream = response.body?.byteStream()
-                        ?: throw IllegalStateException("Пустой SSE поток")
+                        ?: throw IllegalStateException("SSE 流为空")
 
                     val reader = BufferedReader(InputStreamReader(bodyStream, StandardCharsets.UTF_8))
                     val dataBuffer = StringBuilder()
@@ -478,7 +478,7 @@ class OpenCodeApiClient(
                 }.getOrNull()
                 throw OpenCodeHttpException(
                     statusCode = response.code,
-                    message = parsedError ?: "OpenCode API ошибка HTTP ${response.code}",
+                    message = parsedError ?: "OpenCode API 返回 HTTP 错误 ${response.code}",
                 )
             }
             return responseBody

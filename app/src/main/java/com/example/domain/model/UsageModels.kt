@@ -184,7 +184,7 @@ object UsageCalculator {
      * - Currency cost:
      *   1) If custom per-1M prices are set: ((input * price_in + output * price_out) / 1_000_000) * multiplier
      *   2) Otherwise if serverCostUsd > 0: serverCostUsd
-     *   3) Otherwise null ("стоимость не задана")
+     *   3) Otherwise null ("未设置费用")
      */
     fun computeMessageCost(
         tokens: TokenUsage,
@@ -299,7 +299,7 @@ object UsageCalculator {
         pricingByKey = pricingByKey,
         keySelector = { it.dayKey },
         titleSelector = { key, _ -> key },
-        subtitleSelector = { _, list -> "${list.size} запр." },
+        subtitleSelector = { _, list -> "${list.size} 次请求" },
     ).sortedByDescending { it.key }
 
     fun aggregateByModel(
@@ -309,7 +309,7 @@ object UsageCalculator {
         records = records,
         pricingByKey = pricingByKey,
         keySelector = { ModelPricing.keyOf(it.providerId, it.modelId) },
-        titleSelector = { _, list -> list.first().modelId.ifBlank { "неизвестная модель" } },
+        titleSelector = { _, list -> list.first().modelId.ifBlank { "未知模型" } },
         subtitleSelector = { _, list -> list.first().providerId.ifBlank { null } },
     ).sortedByDescending { it.totalTokens }
 
@@ -323,7 +323,7 @@ object UsageCalculator {
         titleSelector = { key, _ -> key },
         subtitleSelector = { _, list ->
             val modelCount = list.map { it.modelId }.distinct().size
-            "$modelCount модел."
+            "$modelCount 个模型"
         },
     ).sortedByDescending { it.totalTokens }
 
@@ -491,16 +491,16 @@ object UsageCalculator {
         return when {
             count >= 1_000_000L -> String.format(Locale.US, "%.2fM", count / 1_000_000.0)
             count >= 10_000L -> String.format(Locale.US, "%.1fk", count / 1_000.0)
-            else -> String.format(Locale("ru", "RU"), "%,d", count).replace(',', ' ')
+            else -> String.format(Locale.SIMPLIFIED_CHINESE, "%,d", count).replace(',', ' ')
         }
     }
 
     fun formatUnits(units: Double): String {
         return when {
-            units >= 1_000_000.0 -> String.format(Locale.US, "%.2fM ед.", units / 1_000_000.0)
-            units >= 10_000.0 -> String.format(Locale.US, "%.1fk ед.", units / 1_000.0)
-            units == units.toLong().toDouble() -> "${formatTokenCount(units.toLong())} ед."
-            else -> String.format(Locale.US, "%.1f ед.", units)
+            units >= 1_000_000.0 -> String.format(Locale.US, "%.2fM 单位", units / 1_000_000.0)
+            units >= 10_000.0 -> String.format(Locale.US, "%.1fk 单位", units / 1_000.0)
+            units == units.toLong().toDouble() -> "${formatTokenCount(units.toLong())} 单位"
+            else -> String.format(Locale.US, "%.1f 单位", units)
         }
     }
 

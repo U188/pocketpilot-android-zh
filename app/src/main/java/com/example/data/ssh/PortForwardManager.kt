@@ -76,7 +76,7 @@ class PortForwardManager(
                                 }.getOrElse { err ->
                                     rule.copy(
                                         isActive = false,
-                                        errorMessage = err.message ?: "Не удалось восстановить туннель",
+                                        errorMessage = err.message ?: "无法恢复隧道",
                                     )
                                 }
                             }
@@ -117,14 +117,14 @@ class PortForwardManager(
         label: String = "",
     ): Result<PortForwardRule> = withContext(Dispatchers.IO) {
         if (remotePort !in 1..65535) {
-            return@withContext Result.failure(IllegalArgumentException("Порт должен быть в диапазоне 1–65535"))
+            return@withContext Result.failure(IllegalArgumentException("端口必须在 1–65535 范围内"))
         }
         val safeHost = PortForwardParser.validateRemoteHost(remoteHost)
-            ?: return@withContext Result.failure(IllegalArgumentException("Некорректный адрес удалённого хоста"))
+            ?: return@withContext Result.failure(IllegalArgumentException("远程主机地址无效"))
 
         mutex.withLock {
             val client = connectionManager.getActiveSshClient()
-                ?: return@withContext Result.failure(IllegalStateException("Нет активного SSH-подключения"))
+                ?: return@withContext Result.failure(IllegalStateException("没有活动的 SSH 连接"))
 
             // Reuse if an identical active forward already exists
             val existing = _rules.value.firstOrNull {
@@ -145,7 +145,7 @@ class PortForwardManager(
                     )
                 } catch (e: IOException) {
                     if (preferredLocalPort in 1..65535) {
-                        throw IOException("Локальный порт $preferredLocalPort уже занят. Оставьте поле пустым для автовыбора.", e)
+                        throw IOException("本地端口 $preferredLocalPort 已被占用。留空可自动选择端口。", e)
                     }
                     throw e
                 }
@@ -187,7 +187,7 @@ class PortForwardManager(
 
     suspend fun discoverListeningPorts(): Result<List<DiscoveredRemotePort>> = withContext(Dispatchers.IO) {
         val client = connectionManager.getActiveSshClient()
-            ?: return@withContext Result.failure(IllegalStateException("Нет активного SSH-подключения"))
+            ?: return@withContext Result.failure(IllegalStateException("没有活动的 SSH 连接"))
         val openCodePort = (connectionManager.connectionState.value as? SshConnectionState.Connected)
             ?.profile?.openCodePort
 

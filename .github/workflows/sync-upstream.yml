@@ -54,7 +54,7 @@ jobs:
           gradle_version=$(sed -n 's/.*gradle-\([0-9.]*\)-bin.zip.*/\1/p' gradle/wrapper/gradle-wrapper.properties)
           curl -fsSL "https://services.gradle.org/distributions/gradle-${gradle_version}-bin.zip" -o /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d /tmp
-          "/tmp/gradle-${gradle_version}/bin/gradle" assembleDebug --stacktrace -PversionCode=${{ github.run_number }} -PversionName=zh.1.0.${{ github.run_number }}
+          "/tmp/gradle-${gradle_version}/bin/gradle" testDebugUnitTest assembleDebug --stacktrace -PversionCode=${{ github.run_number }} -PversionName=zh.1.0.${{ github.run_number }}
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

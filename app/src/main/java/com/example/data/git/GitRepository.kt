@@ -38,7 +38,7 @@ class GitRepository(
         val statusRes = execGit(repoRoot, "status --porcelain=v2 -b --untracked-files=all", timeoutSec = 15)
         if (statusRes.exitCode != 0) {
             throw IllegalStateException(
-                statusRes.combinedOutput.ifBlank { "Не удалось получить git status" },
+                statusRes.combinedOutput.ifBlank { "无法获取 git status" },
             )
         }
         GitParser.parsePorcelainV2(statusRes.stdout, repoRootPath = repoRoot)
@@ -51,13 +51,13 @@ class GitRepository(
 
     suspend fun initRepository(directory: String): String = withContext(Dispatchers.IO) {
         val res = execGit(directory, "init", timeoutSec = 15)
-        requireSuccess(res, "Не удалось инициализировать Git")
+        requireSuccess(res, "无法初始化 Git")
     }
 
     suspend fun stageFile(repoRoot: String, relativePath: String) = withContext(Dispatchers.IO) {
         val quoted = GitParser.shellQuote(relativePath)
         val res = execGit(repoRoot, "add -- $quoted", timeoutSec = 15)
-        requireSuccess(res, "Не удалось добавить файл в индекс")
+        requireSuccess(res, "无法将文件加入暂存区")
     }
 
     suspend fun unstageFile(repoRoot: String, relativePath: String) = withContext(Dispatchers.IO) {
@@ -69,12 +69,12 @@ class GitRepository(
             timeoutSec = 15,
             rawShellAfterC = true,
         )
-        requireSuccess(res, "Не удалось убрать файл из индекса")
+        requireSuccess(res, "无法将文件从暂存区移除")
     }
 
     suspend fun stageAll(repoRoot: String) = withContext(Dispatchers.IO) {
         val res = execGit(repoRoot, "add -A", timeoutSec = 20)
-        requireSuccess(res, "Не удалось добавить все файлы в индекс")
+        requireSuccess(res, "无法将所有文件加入暂存区")
     }
 
     suspend fun unstageAll(repoRoot: String) = withContext(Dispatchers.IO) {
@@ -84,7 +84,7 @@ class GitRepository(
             timeoutSec = 20,
             rawShellAfterC = true,
         )
-        requireSuccess(res, "Не удалось очистить индекс")
+        requireSuccess(res, "无法清空暂存区")
     }
 
     suspend fun discardFile(repoRoot: String, change: GitFileChange) = withContext(Dispatchers.IO) {
@@ -94,7 +94,7 @@ class GitRepository(
                 "cd ${GitParser.shellQuote(repoRoot)} && rm -rf -- $quoted",
                 timeoutSec = 15,
             )
-            requireSuccess(res, "Не удалось удалить неотслеживаемый файл")
+            requireSuccess(res, "无法删除未跟踪文件")
         } else if (change.isStaged) {
             // Unstage first, then restore working tree if tracked in HEAD
             val res = execRawShell(
@@ -102,10 +102,10 @@ class GitRepository(
                     "git -C ${GitParser.shellQuote(repoRoot)} checkout -- $quoted 2>/dev/null || true",
                 timeoutSec = 15,
             )
-            requireSuccess(res, "Не удалось откатить файл")
+            requireSuccess(res, "无法还原文件")
         } else {
             val res = execGit(repoRoot, "checkout -- $quoted", timeoutSec = 15)
-            requireSuccess(res, "Не удалось откатить изменения")
+            requireSuccess(res, "无法回退更改")
         }
     }
 
@@ -132,7 +132,7 @@ class GitRepository(
         autoStageAll: Boolean = false,
     ): String = withContext(Dispatchers.IO) {
         val trimmed = message.trim()
-        require(trimmed.isNotBlank()) { "Введите сообщение коммита" }
+        require(trimmed.isNotBlank()) { "请输入提交说明" }
         if (autoStageAll) {
             stageAll(repoRoot)
         }
@@ -143,21 +143,21 @@ class GitRepository(
             stdinText = "$trimmed\n",
             timeoutSec = 25,
         )
-        requireSuccess(res, "Не удалось выполнить коммит")
+        requireSuccess(res, "无法创建提交")
     }
 
     suspend fun fetch(repoRoot: String): String = withContext(Dispatchers.IO) {
         val res = execGit(repoRoot, "fetch --all --prune", timeoutSec = 45)
-        requireSuccess(res, "Ошибка git fetch")
+        requireSuccess(res, "git fetch 失败")
     }
 
     suspend fun pull(repoRoot: String): String = withContext(Dispatchers.IO) {
         val res = execGit(repoRoot, "pull --ff-only", timeoutSec = 60)
         if (res.exitCode != 0 && res.combinedOutput.contains("Not possible to fast-forward", ignoreCase = true)) {
             val mergeRes = execGit(repoRoot, "pull --no-rebase", timeoutSec = 60)
-            return@withContext requireSuccess(mergeRes, "Ошибка git pull")
+            return@withContext requireSuccess(mergeRes, "git pull 失败")
         }
-        requireSuccess(res, "Ошибка git pull")
+        requireSuccess(res, "git pull 失败")
     }
 
     suspend fun push(repoRoot: String, currentBranch: String, hasUpstream: Boolean): String = withContext(Dispatchers.IO) {
@@ -167,7 +167,7 @@ class GitRepository(
             "push"
         }
         val res = execGit(repoRoot, args, timeoutSec = 60)
-        requireSuccess(res, "Ошибка git push")
+        requireSuccess(res, "git push 失败")
     }
 
     suspend fun loadBranches(repoRoot: String): List<GitBranchEntry> = withContext(Dispatchers.IO) {
@@ -183,7 +183,7 @@ class GitRepository(
         isRemote: Boolean,
     ): String = withContext(Dispatchers.IO) {
         val clean = branchName.trim()
-        require(GitParser.isValidBranchName(clean)) { "Некорректное имя ветки: $clean" }
+        require(GitParser.isValidBranchName(clean)) { "分支名称无效：$clean" }
         val args = if (isRemote) {
             // Strip remote prefix (e.g. origin/feature -> feature) and track
             val localName = clean.substringAfter('/', clean)
@@ -192,14 +192,14 @@ class GitRepository(
             "checkout ${GitParser.shellQuote(clean)}"
         }
         val res = execGit(repoRoot, args, timeoutSec = 25)
-        requireSuccess(res, "Не удалось переключить ветку")
+        requireSuccess(res, "无法切换分支")
     }
 
     suspend fun createAndSwitchBranch(repoRoot: String, newBranchName: String): String = withContext(Dispatchers.IO) {
         val clean = newBranchName.trim()
-        require(GitParser.isValidBranchName(clean)) { "Некорректное имя ветки (без пробелов и спецсимволов)" }
+        require(GitParser.isValidBranchName(clean)) { "分支名称无效（不能包含空格或特殊字符）" }
         val res = execGit(repoRoot, "checkout -b ${GitParser.shellQuote(clean)}", timeoutSec = 20)
-        requireSuccess(res, "Не удалось создать ветку")
+        requireSuccess(res, "无法创建分支")
     }
 
     suspend fun loadRecentCommits(repoRoot: String, limit: Int = 20): List<GitCommitEntry> = withContext(Dispatchers.IO) {
@@ -211,9 +211,9 @@ class GitRepository(
 
     suspend fun loadCommitDiff(repoRoot: String, commitHash: String): String = withContext(Dispatchers.IO) {
         val clean = commitHash.trim()
-        require(clean.matches(Regex("[0-9a-fA-F]{4,40}"))) { "Некорректный хэш коммита" }
+        require(clean.matches(Regex("[0-9a-fA-F]{4,40}"))) { "提交哈希无效" }
         val res = execGit(repoRoot, "show --stat --patch --format=medium $clean", timeoutSec = 20)
-        requireSuccess(res, "Не удалось загрузить diff коммита")
+        requireSuccess(res, "无法加载提交差异")
     }
 
     private fun requireSuccess(res: GitCommandResult, fallbackMessage: String): String {
@@ -245,7 +245,7 @@ class GitRepository(
         timeoutSec: Long = 20,
     ): GitCommandResult = withContext(Dispatchers.IO) {
         val client = connectionManager.getActiveSshClient()
-            ?: throw IllegalStateException("SSH-соединение не активно")
+            ?: throw IllegalStateException("SSH 连接未激活")
 
         client.startSession().use { session ->
             val cmd = session.exec(command)

@@ -32,7 +32,7 @@ sealed interface ProviderApplyOutcome {
 
     /**
      * opencode.json was written and opencode-serve is `active`, so the config is NOT rolled back.
-     * The post-restart /session check did not pass within 40s — show warning with "Повторить" / "Продолжить".
+     * 重启后 /session 检查在 40 秒内未通过时显示警告，配置不会回滚。
      */
     data class SavedWithCheckWarning(
         val providerId: String? = null,
@@ -114,17 +114,17 @@ class OpenCodeProviderManager(
         val models = runCatching {
             OpenCodeConfigHelper.parseOpenAiModelsResponse(response.body)
         }.getOrElse { err ->
-            throw IllegalStateException("Некорректный JSON от /models: ${err.message ?: "ошибка разбора"}")
+            throw IllegalStateException("/models 返回了无效 JSON：${err.message ?: "解析失败"}")
         }
         if (models.isEmpty()) {
-            throw IllegalStateException("Провайдер ответил HTTP ${response.httpCode}, но список моделей пуст")
+            throw IllegalStateException("供应商返回 HTTP ${response.httpCode}，但模型列表为空")
         }
         models
     }
 
     /**
-     * Sends a live test prompt ("ответь одним словом") via POST {baseURL}/chat/completions
-     * executed from the remote server, returning either the model's reply or the HTTP code + error body.
+     * 通过 POST {baseURL}/chat/completions 从远程服务器发送实时测试提示词“请只回答一个词”，
+     * 并返回模型回复或 HTTP 状态码及错误正文。
      */
     suspend fun testModelCompletion(
         baseUrl: String,
@@ -134,7 +134,7 @@ class OpenCodeProviderManager(
         openCodePort: Int,
     ): ModelTestResult = withContext(Dispatchers.IO) {
         val cleanModel = modelId.trim()
-        require(cleanModel.isNotEmpty()) { "Выберите модель для проверки" }
+        require(cleanModel.isNotEmpty()) { "请选择要测试的模型" }
 
         val normalizedBase = OpenCodeConfigHelper.normalizeBaseUrl(baseUrl)
         val effectiveKey = resolveEffectiveKeyTransient(apiKeyInput, existingProviderId, openCodePort)
@@ -146,7 +146,7 @@ class OpenCodeProviderManager(
                 JSONArray().put(
                     JSONObject()
                         .put("role", "user")
-                        .put("content", "ответь одним словом"),
+                        .put("content", "请只回答一个词"),
                 ),
             )
             put("max_tokens", 32)
@@ -175,7 +175,7 @@ class OpenCodeProviderManager(
                 success = false,
                 httpCode = null,
                 modelId = cleanModel,
-                message = "На сервере не установлен curl",
+                message = "服务器未安装 curl",
             )
         }
 
@@ -184,7 +184,7 @@ class OpenCodeProviderManager(
                 success = false,
                 httpCode = null,
                 modelId = cleanModel,
-                message = "Ошибка TLS/SSL при подключении сервера к адресу (код curl ${response.exitCode})",
+                message = "服务器连接地址时发生 TLS/SSL 错误（curl 退出码 ${response.exitCode}）",
             )
         }
 
@@ -196,7 +196,7 @@ class OpenCodeProviderManager(
         if (response.httpCode in 200..299) {
             val reply = runCatching {
                 OpenCodeConfigHelper.parseChatCompletionReply(cleanBody)
-            }.getOrElse { cleanBody.take(240) }.ifBlank { "OK (пустой ответ)" }
+            }.getOrElse { cleanBody.take(240) }.ifBlank { "成功（空响应）" }
 
             ModelTestResult(
                 success = true,
@@ -207,7 +207,7 @@ class OpenCodeProviderManager(
         } else {
             val errorDetail = cleanBody.take(600)
                 .ifBlank { OpenCodeConfigHelper.sanitizeLogs(response.stderr.trim().take(300), listOfNotNull(effectiveKey)) }
-                .ifBlank { "Пустой ответ сервера" }
+                .ifBlank { "服务器返回空响应" }
             ModelTestResult(
                 success = false,
                 httpCode = response.httpCode.takeIf { it > 0 },
@@ -219,7 +219,7 @@ class OpenCodeProviderManager(
 
     /**
      * Checks from the remote server that baseURL is reachable over the network (no timeout/DNS/connect failure).
-     * Throws ServerUnreachableException("Сервер не имеет доступа к интернету или адресу") if unreachable.
+     * Throws ServerUnreachableException("服务器无法访问互联网或目标地址") if unreachable.
      */
     suspend fun verifyServerReachable(
         baseUrl: String,
@@ -257,7 +257,7 @@ class OpenCodeProviderManager(
             openCodePort = openCodePort,
         )
 
-        onStepUpdate(0, InstallStepStatus.RUNNING, "Проверка доступности адреса с сервера…")
+        onStepUpdate(0, InstallStepStatus.RUNNING, "正在从服务器检查地址是否可访问…")
         // Verify reachability from server BEFORE modifying opencode.json
         verifyServerReachable(request.baseUrl, effectiveKey)
 
@@ -273,7 +273,7 @@ class OpenCodeProviderManager(
 
         val merged = OpenCodeConfigHelper.mergeOpenAiCompatibleProvider(previousConfig, request)
 
-        onStepUpdate(0, InstallStepStatus.RUNNING, "Запись ~/.config/opencode/opencode.json по SFTP…")
+        onStepUpdate(0, InstallStepStatus.RUNNING, "正在通过 SFTP 写入 ~/.config/opencode/opencode.json…")
         // Write exclusively via SFTP so API key never touches shell commands or logs
         sftpRepository.writeTextFile(
             path = configPath,
@@ -282,7 +282,7 @@ class OpenCodeProviderManager(
             forceOverwrite = true,
         )
         runCatching { sftpRepository.chmod(configPath, 0x180) }
-        onStepUpdate(0, InstallStepStatus.SUCCESS, "opencode.json записан (chmod 600)")
+        onStepUpdate(0, InstallStepStatus.SUCCESS, "opencode.json 已写入（chmod 600）")
 
         val resolvedProviderId = OpenCodeConfigHelper.sanitizeProviderId(
             request.providerId.ifBlank { request.providerName },
@@ -317,9 +317,9 @@ class OpenCodeProviderManager(
         onStepUpdate: (stepIndex: Int, status: InstallStepStatus, detail: String?) -> Unit = { _, _, _ -> },
     ): ProviderApplyOutcome = withContext(Dispatchers.IO) {
         val cleanKey = newApiKey.trim()
-        require(cleanKey.isNotEmpty()) { "Введите новый API-ключ" }
+        require(cleanKey.isNotEmpty()) { "请输入新的 API 密钥" }
 
-        onStepUpdate(0, InstallStepStatus.RUNNING, "Проверка доступа с новым ключом…")
+        onStepUpdate(0, InstallStepStatus.RUNNING, "正在使用新密钥检查访问权限…")
         if (baseUrl.isNotBlank()) {
             verifyServerReachable(baseUrl, cleanKey)
         }
@@ -328,7 +328,7 @@ class OpenCodeProviderManager(
         val previousConfig = sftpRepository.readTextFile(configPath).text
         val updated = OpenCodeConfigHelper.updateProviderApiKey(previousConfig, providerId, cleanKey)
 
-        onStepUpdate(0, InstallStepStatus.RUNNING, "Обновление ключа в opencode.json по SFTP…")
+        onStepUpdate(0, InstallStepStatus.RUNNING, "正在通过 SFTP 更新 opencode.json 中的密钥…")
         sftpRepository.writeTextFile(
             path = configPath,
             text = updated,
@@ -336,7 +336,7 @@ class OpenCodeProviderManager(
             forceOverwrite = true,
         )
         runCatching { sftpRepository.chmod(configPath, 0x180) }
-        onStepUpdate(0, InstallStepStatus.SUCCESS, "Ключ записан в opencode.json (chmod 600)")
+        onStepUpdate(0, InstallStepStatus.SUCCESS, "密钥已写入 opencode.json（chmod 600）")
 
         restartAndWaitWithSelectiveRollback(
             profileId = profileId,
@@ -361,7 +361,7 @@ class OpenCodeProviderManager(
         localTunnelPort: Int?,
         onStepUpdate: (stepIndex: Int, status: InstallStepStatus, detail: String?) -> Unit = { _, _, _ -> },
     ): ProviderApplyOutcome = withContext(Dispatchers.IO) {
-        onStepUpdate(0, InstallStepStatus.RUNNING, "Обновление opencode.json по SFTP…")
+        onStepUpdate(0, InstallStepStatus.RUNNING, "正在通过 SFTP 更新 opencode.json…")
         val configPath = resolveConfigPath(openCodePort)
         val previousConfig = sftpRepository.readTextFile(configPath).text
         val updated = OpenCodeConfigHelper.removeProvider(previousConfig, providerId)
@@ -373,7 +373,7 @@ class OpenCodeProviderManager(
             forceOverwrite = true,
         )
         runCatching { sftpRepository.chmod(configPath, 0x180) }
-        onStepUpdate(0, InstallStepStatus.SUCCESS, "Провайдер удалён из opencode.json")
+        onStepUpdate(0, InstallStepStatus.SUCCESS, "已从 opencode.json 移除供应商")
 
         restartAndWaitWithSelectiveRollback(
             profileId = profileId,
@@ -397,7 +397,7 @@ class OpenCodeProviderManager(
         defaultModelId: String?,
         onStepUpdate: (stepIndex: Int, status: InstallStepStatus, detail: String?) -> Unit,
     ): ProviderApplyOutcome = withContext(Dispatchers.IO) {
-        onStepUpdate(2, InstallStepStatus.RUNNING, "Повторное ожидание ответа сервера (до 40 с)…")
+        onStepUpdate(2, InstallStepStatus.RUNNING, "再次等待服务器响应（最多 40 秒）…")
         val ready = serverInstaller.waitForServerReadyAfterRestart(
             profileId = profileId,
             isUserService = null,
@@ -418,7 +418,7 @@ class OpenCodeProviderManager(
                 providerId = providerId,
                 defaultModelId = defaultModelId,
                 tunnelPort = ready.activeTunnelPort,
-                warningMessage = "Конфиг opencode.json сохранён и не откатывался, но сервер не ответил на /session за 40 с (${ready.detail}). Вы можете повторить проверку или продолжить.",
+                warningMessage = "opencode.json 配置已保存且未回滚，但服务器在 40 秒内未响应 /session（${ready.detail}）。你可以重试检查或继续。",
             )
         }
     }
@@ -434,14 +434,14 @@ class OpenCodeProviderManager(
         onStepUpdate: (stepIndex: Int, status: InstallStepStatus, detail: String?) -> Unit,
     ): ProviderApplyOutcome {
         // Step 1: Restart opencode-serve and verify it transitions to active
-        onStepUpdate(1, InstallStepStatus.RUNNING, "Перезапуск службы opencode-serve…")
+        onStepUpdate(1, InstallStepStatus.RUNNING, "正在重启 opencode-serve 服务…")
         val restartRes = runCatching {
             serverInstaller.restartServiceAndCheckActive(port = openCodePort)
         }.getOrElse { err ->
-            onStepUpdate(1, InstallStepStatus.ERROR, err.message ?: "Ошибка перезапуска службы")
+            onStepUpdate(1, InstallStepStatus.ERROR, err.message ?: "重启服务失败")
             val rollbackNote = rollbackConfigToBackup(configPath, previousConfig, openCodePort)
             return ProviderApplyOutcome.RolledBackServiceInactive(
-                errorMessage = "Служба opencode-serve не перешла в active после перезапуска (${err.message ?: "ошибка"}). $rollbackNote",
+                errorMessage = "重启后 opencode-serve 未进入 active 状态（${err.message ?: "错误"}）。$rollbackNote",
             )
         }
 
@@ -449,13 +449,13 @@ class OpenCodeProviderManager(
             onStepUpdate(1, InstallStepStatus.ERROR, restartRes.detail)
             val rollbackNote = rollbackConfigToBackup(configPath, previousConfig, openCodePort)
             return ProviderApplyOutcome.RolledBackServiceInactive(
-                errorMessage = "Служба opencode-serve не стала active (${restartRes.stateText}). $rollbackNote",
+                errorMessage = "opencode-serve 未进入 active 状态（${restartRes.stateText}）。$rollbackNote",
             )
         }
         onStepUpdate(1, InstallStepStatus.SUCCESS, restartRes.detail)
 
         // Step 2: Poll GET /session every 2s for 40s (Basic Auth, 401 = alive, rebuild SSH tunnel on drop)
-        onStepUpdate(2, InstallStepStatus.RUNNING, "Ожидание ответа GET /session (до 40 с)…")
+        onStepUpdate(2, InstallStepStatus.RUNNING, "正在等待 GET /session 响应（最多 40 秒）…")
         val ready = serverInstaller.waitForServerReadyAfterRestart(
             profileId = profileId,
             isUserService = restartRes.isUserService,
@@ -464,11 +464,11 @@ class OpenCodeProviderManager(
         )
 
         if (!ready.serviceActive) {
-            onStepUpdate(1, InstallStepStatus.ERROR, "Служба остановилась после запуска")
+            onStepUpdate(1, InstallStepStatus.ERROR, "服务启动后停止运行")
             onStepUpdate(2, InstallStepStatus.ERROR, ready.detail)
             val rollbackNote = rollbackConfigToBackup(configPath, previousConfig, openCodePort)
             return ProviderApplyOutcome.RolledBackServiceInactive(
-                errorMessage = "Служба opencode-serve не удержалась в состоянии active (${ready.detail}). $rollbackNote",
+                errorMessage = "opencode-serve 未能保持 active 状态（${ready.detail}）。$rollbackNote",
             )
         }
 
@@ -483,12 +483,12 @@ class OpenCodeProviderManager(
         }
 
         // Config was written AND opencode-serve IS active -> DO NOT ROLL BACK!
-        onStepUpdate(2, InstallStepStatus.ERROR, "Таймаут 40 с: ${ready.detail}")
+        onStepUpdate(2, InstallStepStatus.ERROR, "等待超时（40 秒）：${ready.detail}")
         return ProviderApplyOutcome.SavedWithCheckWarning(
             providerId = providerId,
             defaultModelId = defaultModelId,
             tunnelPort = ready.activeTunnelPort,
-            warningMessage = "Файл ~/.config/opencode/opencode.json успешно записан, служба opencode-serve активна (active), но автопроверка /session не прошла за 40 с (${ready.detail}). Конфиг сохранён без отката.",
+            warningMessage = "~/.config/opencode/opencode.json 已成功写入，opencode-serve 服务处于 active 状态，但 /session 自动检查在 40 秒内未通过（${ready.detail}）。配置已保留，未回滚。",
         )
     }
 
@@ -514,9 +514,9 @@ class OpenCodeProviderManager(
         }.isSuccess
 
         return if (restored) {
-            "Выполнен откат ~/.config/opencode/opencode.json к резервной копии и повторный перезапуск службы."
+            "已将 ~/.config/opencode/opencode.json 恢复为备份，并再次重启服务。"
         } else {
-            "Не удалось автоматически восстановить резервную копию opencode.json — проверьте файл вручную."
+            "无法自动恢复 opencode.json 备份，请手动检查文件。"
         }
     }
 
@@ -544,7 +544,7 @@ class OpenCodeProviderManager(
 
     private suspend fun ensureConfigDir(configDir: String) {
         val client = connectionManager.getActiveSshClient()
-            ?: throw IllegalStateException("SSH-соединение не активно")
+            ?: throw IllegalStateException("SSH 连接未激活")
         val quoted = "'" + configDir.replace("'", "'\\''") + "'"
         client.startSession().use { session ->
             val cmd = session.exec("mkdir -p $quoted && chmod 700 $quoted")
@@ -561,7 +561,7 @@ class OpenCodeProviderManager(
         maxTimeSec: Int,
     ): RemoteCurlResponse = coroutineScope {
         val client = connectionManager.getActiveSshClient()
-            ?: throw IllegalStateException("SSH-соединение не активно")
+            ?: throw IllegalStateException("SSH 连接未激活")
 
         val sanitizedUrl = url.replace("\r", "").replace("\n", "").trim()
         val sanitizedKey = apiKey?.replace("\r", "")?.replace("\n", "")?.trim()
@@ -636,13 +636,13 @@ class OpenCodeProviderManager(
 
     private fun throwIfServerUnreachable(response: RemoteCurlResponse, secret: String?) {
         if (response.exitCode == 127) {
-            throw IllegalStateException("На сервере не установлен curl — невозможно обратиться к провайдеру")
+            throw IllegalStateException("服务器未安装 curl — 无法连接供应商")
         }
         if (isUnreachableResponse(response)) {
             throw ServerUnreachableException(OpenCodeConfigHelper.SERVER_UNREACHABLE_MESSAGE)
         }
         if (response.exitCode == 35 || response.exitCode == 60) {
-            throw IllegalStateException("Ошибка TLS/SSL при подключении сервера к адресу (код curl ${response.exitCode})")
+            throw IllegalStateException("服务器连接地址时发生 TLS/SSL 错误（curl 退出码 ${response.exitCode}）")
         }
         if (response.httpCode == 0 && response.exitCode != 0) {
             val detail = OpenCodeConfigHelper.sanitizeLogs(response.stderr.trim(), listOfNotNull(secret))

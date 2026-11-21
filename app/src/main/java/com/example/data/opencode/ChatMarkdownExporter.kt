@@ -15,21 +15,21 @@ object ChatMarkdownExporter {
         workspacePath: String,
         messages: List<OpenCodeMessage>,
     ): String {
-        val title = sessionTitle.trim().ifBlank { "Сессия OpenCode" }
+        val title = sessionTitle.trim().ifBlank { "OpenCode 会话" }
         val sb = StringBuilder()
         sb.appendLine("# $title")
         sb.appendLine()
         if (workspacePath.isNotBlank()) {
-            sb.appendLine("- **Проект:** `$workspacePath`")
+            sb.appendLine("- **项目：** `$workspacePath`")
         }
-        sb.appendLine("- **Экспортировано:** ${timeFormatter.format(Instant.now().atZone(ZoneId.systemDefault()))}")
-        sb.appendLine("- **Сообщений:** ${messages.size}")
+        sb.appendLine("- **导出时间：** ${timeFormatter.format(Instant.now().atZone(ZoneId.systemDefault()))}")
+        sb.appendLine("- **消息数：** ${messages.size}")
         sb.appendLine()
         sb.appendLine("---")
         sb.appendLine()
 
         messages.forEach { msg ->
-            val roleHeader = if (msg.isUser) "## Пользователь" else "## Ассистент"
+            val roleHeader = if (msg.isUser) "## 用户" else "## 助手"
             val metaParts = buildList {
                 if (msg.createdAtMillis > 0L) {
                     add(timeFormatter.format(Instant.ofEpochMilli(msg.createdAtMillis).atZone(ZoneId.systemDefault())))
@@ -52,7 +52,7 @@ object ChatMarkdownExporter {
                     is OpenCodePart.Reasoning -> {
                         if (part.text.isNotBlank()) {
                             sb.appendLine("<details>")
-                            sb.appendLine("<summary>Размышления</summary>")
+                            sb.appendLine("<summary>思考过程</summary>")
                             sb.appendLine()
                             sb.appendLine(part.text.trim())
                             sb.appendLine("</details>")
@@ -62,30 +62,30 @@ object ChatMarkdownExporter {
 
                     is OpenCodePart.Tool -> {
                         val toolTitle = part.title?.takeIf { it.isNotBlank() } ?: part.toolName
-                        sb.appendLine("> **Инструмент:** `$toolTitle` (${part.status.name.lowercase()})")
+                        sb.appendLine("> **工具：** `$toolTitle` (${part.status.name.lowercase()})")
                         part.inputSummary?.takeIf { it.isNotBlank() }?.let {
-                            sb.appendLine("> Ввод: `$it`")
+                            sb.appendLine("> 输入：`$it`")
                         }
                         part.error?.takeIf { it.isNotBlank() }?.let {
-                            sb.appendLine("> Ошибка: $it")
+                            sb.appendLine("> 错误：$it")
                         }
                         sb.appendLine()
                     }
 
                     is OpenCodePart.FileAttachment -> {
-                        sb.appendLine("- Вложение: `${part.filename}` (`${part.mime}`)")
+                        sb.appendLine("- 附件：`${part.filename}`（`${part.mime}`）")
                     }
 
                     is OpenCodePart.Patch -> {
                         if (part.files.isNotEmpty()) {
-                            sb.appendLine("- Изменённые файлы: ${part.files.joinToString(", ") { "`$it`" }}")
+                            sb.appendLine("- 已修改文件：${part.files.joinToString(", ") { "`$it`" }}")
                         }
                     }
                 }
             }
 
             if (!msg.error.isNullOrBlank()) {
-                sb.appendLine("> **Ошибка:** ${msg.error}")
+                sb.appendLine("> **错误：** ${msg.error}")
                 sb.appendLine()
             }
             sb.appendLine("---")

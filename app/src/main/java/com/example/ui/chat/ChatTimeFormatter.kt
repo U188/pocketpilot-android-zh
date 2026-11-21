@@ -34,8 +34,8 @@ object ChatTimeFormatter {
     }
 
     /**
-     * Formats assistant generation duration (e.g., "за 14 с", "за 1 мин 12 с", "за <1 с").
-     * Returns null when duration cannot be determined or is non-positive.
+     * 格式化智能体生成回复所用的时间。
+     * 当无法确定时长或时长不大于零时返回 null。
      */
     fun formatGenerationDuration(
         startMillis: Long,
@@ -45,12 +45,12 @@ object ChatTimeFormatter {
         val diffMs = endMillis - startMillis
         val totalSec = diffMs / 1000L
         return when {
-            totalSec < 1L -> "за <1 с"
-            totalSec < 60L -> "за $totalSec с"
+            totalSec < 1L -> "<1 秒"
+            totalSec < 60L -> "用时 $totalSec 秒"
             else -> {
                 val minutes = totalSec / 60L
                 val remSec = totalSec % 60L
-                if (remSec == 0L) "за $minutes мин" else "за $minutes мин $remSec с"
+                if (remSec == 0L) "用时 $minutes 分钟" else "用时 $minutes 分 $remSec 秒"
             }
         }
     }
@@ -102,13 +102,13 @@ object ChatTimeFormatter {
                             append("[${part.toolName}]")
                             part.inputSummary?.let { append(" $it") }
                             part.output?.takeIf { it.isNotBlank() }?.let { append("\n$it") }
-                            part.error?.takeIf { it.isNotBlank() }?.let { append("\nОшибка: $it") }
+                            part.error?.takeIf { it.isNotBlank() }?.let { append("\n错误：$it") }
                         }
                         if (line.isNotBlank()) sections.add(line)
                     }
                     is OpenCodePart.Patch -> {
                         if (part.files.isNotEmpty()) {
-                            sections.add("Изменены файлы: ${part.files.joinToString(", ")}")
+                            sections.add("已更改文件：${part.files.joinToString(", ")}")
                         }
                     }
                     else -> Unit
@@ -116,7 +116,7 @@ object ChatTimeFormatter {
             }
         }
         message.error?.takeIf { it.isNotBlank() }?.let { err ->
-            sections.add("Ошибка: $err")
+            sections.add("错误：$err")
         }
         return sections.joinToString("\n\n").trim()
     }

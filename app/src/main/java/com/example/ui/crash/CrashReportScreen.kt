@@ -147,7 +147,7 @@ fun CrashReportScreen(
                         }
                         if (formattedTime.isNotBlank() || report.threadName.isNotBlank()) {
                             Text(
-                                text = "$formattedTime • поток: ${report.threadName}",
+                                text = "$formattedTime • 线程：${report.threadName}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
                             )

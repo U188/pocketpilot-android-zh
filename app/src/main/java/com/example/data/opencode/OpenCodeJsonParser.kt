@@ -778,7 +778,7 @@ object OpenCodeJsonParser {
                 val sessionId = props.optString("sessionID").takeIf { it.isNotBlank() }
                     ?: props.optString("id").takeIf { it.isNotBlank() }
                 val message = extractErrorMessage(props)
-                    ?: "Ошибка сессии OpenCode"
+                    ?: "OpenCode 会话错误"
                 OpenCodeEvent.SessionError(sessionId = sessionId, message = message)
             }
 
@@ -909,8 +909,8 @@ object OpenCodeJsonParser {
     }
 
     fun defaultAgents(): List<OpenCodeAgent> = listOf(
-        OpenCodeAgent(name = "build", description = "Полный доступ к правке файлов и командам"),
-        OpenCodeAgent(name = "plan", description = "Анализ и планирование без изменения файлов"),
+        OpenCodeAgent(name = "build", description = "可完整访问文件编辑和命令执行"),
+        OpenCodeAgent(name = "plan", description = "仅分析和规划，不修改文件"),
     )
 
     private fun extractFilePath(input: JSONObject?): String? {

@@ -8,8 +8,9 @@ PocketPilot 是一个 Android 客户端，可通过 SSH 连接自己的服务器
 
 - 上游：[`renderr03/pocketpilot-android`](https://github.com/renderr03/pocketpilot-android)
 - 默认分支：`main`
-- 汉化状态：进行中。目前覆盖一部分 Android 字符串资源；上游 711 条字符串中已有 170 条简体中文翻译，部分界面仍会显示英文，Compose 中直接编写的文本也尚未全部汉化。
-- 构建状态：GitHub Actions 会构建中文 Debug APK，并发布到本仓库的 GitHub Releases。
+    - 汉化状态：711 条 Android 字符串资源均已覆盖，工作区、聊天、文件、终端、设置、Git、用量、模型、安装向导和系统提示已翻译为简体中文。
+    - 俄文输入兼容：提示词命令名仍允许俄文字母，方便用户自行输入俄文斜杠命令；这不影响界面语言。
+    - 构建状态：GitHub Actions 先运行单元测试，通过后构建中文 Debug APK 并发布到本仓库 GitHub Releases。
 
 ## 上游更新时会发生什么
 
@@ -36,7 +37,7 @@ PocketPilot 是一个 Android 客户端，可通过 SSH 连接自己的服务器
 gradle assembleDebug
 ```
 
-上游仓库没有提交 Gradle Wrapper 脚本。Debug 构建需要 `debug.keystore`；可按需使用 Android 默认 Debug 密钥，或自行生成一个本地密钥。
+上游仓库没有提交 Gradle Wrapper 脚本。本地构建需准备 JDK 17、Android SDK 和 Gradle 9.3.1；持续集成会从固定仓库密钥恢复 Debug 签名证书。
 
 ## 参与汉化
 

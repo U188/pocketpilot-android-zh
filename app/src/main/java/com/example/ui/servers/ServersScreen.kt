@@ -139,14 +139,14 @@ fun ServersScreen(
                 runCatching {
                     context.contentResolver.openInputStream(uri)?.use { input ->
                         input.bufferedReader(Charsets.UTF_8).readText()
-                    } ?: error("Не удалось открыть выбранный файл")
+                    } ?: error("无法打开所选文件")
                 }
             }
             readResult.onSuccess { content ->
                 backupError = null
                 pendingImportContent = content
             }.onFailure { err ->
-                snackbarHostState.showSnackbar("Ошибка чтения файла: ${err.message.orEmpty()}")
+                snackbarHostState.showSnackbar("读取文件失败：${err.message.orEmpty()}")
             }
         }
     }
@@ -354,7 +354,7 @@ fun ServersScreen(
                     val encryptedResult = viewModel.exportEncryptedBackup(password)
                     if (encryptedResult.isFailure) {
                         isBackupBusy = false
-                        backupError = encryptedResult.exceptionOrNull()?.message ?: "Ошибка шифрования"
+                        backupError = encryptedResult.exceptionOrNull()?.message ?: "加密失败"
                         return@launch
                     }
                     val writeResult = withContext(Dispatchers.IO) {
@@ -362,7 +362,7 @@ fun ServersScreen(
                             context.contentResolver.openOutputStream(targetUri)?.use { out ->
                                 out.write(encryptedResult.getOrThrow().toByteArray(Charsets.UTF_8))
                                 out.flush()
-                            } ?: error("Не удалось записать файл")
+                            } ?: error("无法写入文件")
                         }
                     }
                     isBackupBusy = false
@@ -371,7 +371,7 @@ fun ServersScreen(
                         pendingExportUri = null
                         snackbarHostState.showSnackbar(exportSuccessMsg)
                     } else {
-                        backupError = writeResult.exceptionOrNull()?.message ?: "Ошибка сохранения файла"
+                        backupError = writeResult.exceptionOrNull()?.message ?: "保存文件失败"
                     }
                 }
             },
@@ -396,10 +396,10 @@ fun ServersScreen(
                     importResult.onSuccess { res ->
                         pendingImportContent = null
                         snackbarHostState.showSnackbar(
-                            "Импортировано профилей: ${res.importedCount}, обновлено: ${res.updatedCount}",
+                            "已导入 ${res.importedCount} 个配置，更新 ${res.updatedCount} 个",
                         )
                     }.onFailure { err ->
-                        backupError = err.message ?: "Не удалось расшифровать файл"
+                        backupError = err.message ?: "无法解密文件"
                     }
                 }
             },
@@ -499,7 +499,7 @@ private fun ActiveConnectionBanner(
                             accentColor = statusColors.tunnel,
                         )
                         Text(
-                            text = "${state.latencyMs} мс",
+                            text = "${state.latencyMs} 毫秒",
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

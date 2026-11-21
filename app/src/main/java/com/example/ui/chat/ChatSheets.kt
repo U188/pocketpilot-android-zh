@@ -171,8 +171,8 @@ fun AgentPickerBottomSheet(
 ) {
     val list = agents.ifEmpty {
         listOf(
-            OpenCodeAgent("build", "Полный доступ к правке файлов и командам"),
-            OpenCodeAgent("plan", "Анализ и планирование без изменения файлов"),
+            OpenCodeAgent("build", "可完整访问文件编辑和命令执行"),
+            OpenCodeAgent("plan", "仅分析和规划，不修改文件"),
         )
     }
 

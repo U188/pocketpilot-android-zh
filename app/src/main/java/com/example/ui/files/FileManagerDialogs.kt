@@ -598,11 +598,11 @@ fun TransferQueueBottomSheet(
 }
 
 fun formatBytes(bytes: Long): String {
-    if (bytes < 1024L) return "$bytes Б"
+    if (bytes < 1024L) return "$bytes 字节"
     val kb = bytes / 1024.0
-    if (kb < 1024.0) return "%.1f КБ".format(kb)
+    if (kb < 1024.0) return "%.1f KB".format(kb)
     val mb = kb / 1024.0
-    if (mb < 1024.0) return "%.1f МБ".format(mb)
+    if (mb < 1024.0) return "%.1f MB".format(mb)
     val gb = mb / 1024.0
-    return "%.2f ГБ".format(gb)
+    return "%.2f GB".format(gb)
 }

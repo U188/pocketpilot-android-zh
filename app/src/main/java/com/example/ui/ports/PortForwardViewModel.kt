@@ -72,7 +72,7 @@ class PortForwardViewModel(
                     _uiState.update {
                         it.copy(
                             isDiscovering = false,
-                            discoveryError = err.message ?: "Не удалось просканировать порты сервера",
+                            discoveryError = err.message ?: "无法扫描服务器端口",
                         )
                     }
                 }
@@ -105,7 +105,7 @@ class PortForwardViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isSubmitting = true, formError = null) }
             val label = port.processName?.takeIf { it.isNotBlank() }
-                ?: if (port.isOpenCodePort) "OpenCode" else "Порт ${port.port}"
+                ?: if (port.isOpenCodePort) "OpenCode" else "端口 ${port.port}"
             portForwardManager.startForward(
                 remotePort = port.port,
                 remoteHost = "127.0.0.1",
@@ -113,12 +113,12 @@ class PortForwardViewModel(
                 label = label,
             ).onSuccess { rule ->
                 _uiState.update { it.copy(isSubmitting = false) }
-                _toastMessages.tryEmit("Туннель запущен: 127.0.0.1:${rule.localPort} → :${rule.remotePort}")
+                _toastMessages.tryEmit("隧道已启动：127.0.0.1:${rule.localPort} → :${rule.remotePort}")
             }.onFailure { err ->
                 _uiState.update {
                     it.copy(
                         isSubmitting = false,
-                        formError = err.message ?: "Не удалось пробросить порт",
+                        formError = err.message ?: "端口转发失败",
                     )
                 }
             }
@@ -129,19 +129,19 @@ class PortForwardViewModel(
         val state = _uiState.value
         val remotePort = PortForwardParser.validatePort(state.formRemotePort)
         if (remotePort == null) {
-            _uiState.update { it.copy(formError = "Укажите удалённый порт (1–65535)") }
+            _uiState.update { it.copy(formError = "请输入远程端口（1–65535）") }
             return
         }
         val remoteHost = PortForwardParser.validateRemoteHost(state.formRemoteHost)
         if (remoteHost == null) {
-            _uiState.update { it.copy(formError = "Некорректный адрес удалённого хоста") }
+            _uiState.update { it.copy(formError = "远程主机地址无效") }
             return
         }
         val preferredLocal = if (state.formLocalPort.isBlank()) {
             0
         } else {
             PortForwardParser.validatePort(state.formLocalPort) ?: run {
-                _uiState.update { it.copy(formError = "Локальный порт должен быть в диапазоне 1–65535") }
+                _uiState.update { it.copy(formError = "本地端口必须在 1–65535 范围内") }
                 return
             }
         }
@@ -163,12 +163,12 @@ class PortForwardViewModel(
                         formError = null,
                     )
                 }
-                _toastMessages.tryEmit("Порт :${rule.remotePort} доступен на ${rule.localUrl}")
+                _toastMessages.tryEmit("远程端口 :${rule.remotePort} 已映射到 ${rule.localUrl}")
             }.onFailure { err ->
                 _uiState.update {
                     it.copy(
                         isSubmitting = false,
-                        formError = err.message ?: "Не удалось создать проброс порта",
+                        formError = err.message ?: "无法创建端口转发",
                     )
                 }
             }
@@ -178,14 +178,14 @@ class PortForwardViewModel(
     fun stopForward(id: String) {
         viewModelScope.launch {
             portForwardManager.stopForward(id)
-            _toastMessages.tryEmit("Проброс порта остановлен")
+            _toastMessages.tryEmit("端口转发已停止")
         }
     }
 
     fun stopAllForwards() {
         viewModelScope.launch {
             portForwardManager.stopAllForwards()
-            _toastMessages.tryEmit("Все пользовательские туннели остановлены")
+            _toastMessages.tryEmit("所有自定义隧道均已停止")
         }
     }
 

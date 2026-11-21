@@ -30,10 +30,10 @@ class ImageAttachmentProcessor(
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         resolver.openInputStream(uri)?.use { stream ->
             BitmapFactory.decodeStream(stream, null, bounds)
-        } ?: throw IllegalStateException("Не удалось открыть выбранное изображение")
+        } ?: throw IllegalStateException("无法打开所选图片")
 
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            throw IllegalStateException("Файл не является корректным изображением")
+            throw IllegalStateException("文件不是有效图片")
         }
 
         val sampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, MAX_DIMENSION_PX)
@@ -44,7 +44,7 @@ class ImageAttachmentProcessor(
 
         val decoded = resolver.openInputStream(uri)?.use { stream ->
             BitmapFactory.decodeStream(stream, null, decodeOpts)
-        } ?: throw IllegalStateException("Не удалось декодировать изображение")
+        } ?: throw IllegalStateException("无法解码图片")
 
         val scaled = scaleDownIfNeeded(decoded, MAX_DIMENSION_PX)
         if (scaled !== decoded) {

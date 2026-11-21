@@ -81,17 +81,17 @@ class TerminalSnippetRepository(
             autoExecute = true,
         ),
         TerminalSnippetEntity(
-            title = "Файлы (ls -la)",
+            title = "文件列表（ls -la）",
             command = "ls -la",
             autoExecute = true,
         ),
         TerminalSnippetEntity(
-            title = "Docker контейнеры",
+            title = "Docker 容器",
             command = "docker ps",
             autoExecute = true,
         ),
         TerminalSnippetEntity(
-            title = "Системные ресурсы",
+            title = "系统资源",
             command = "df -h && free -h",
             autoExecute = true,
         ),

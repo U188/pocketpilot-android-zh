@@ -55,7 +55,7 @@ class TransferQueueManager(
                 updateTask(taskId) { it.copy(status = TransferStatus.IN_PROGRESS) }
                 try {
                     val stream = appContext.contentResolver.openInputStream(uri)
-                        ?: throw IllegalStateException("Не удалось открыть выбранный файл")
+                        ?: throw IllegalStateException("无法打开所选文件")
                     stream.use { input ->
                         sftpRepository.uploadStream(input, remotePath) { transferred ->
                             updateTask(taskId) {
@@ -77,7 +77,7 @@ class TransferQueueManager(
                     updateTask(taskId) {
                         it.copy(
                             status = TransferStatus.FAILED,
-                            errorMessage = t.message ?: "Ошибка загрузки",
+                            errorMessage = t.message ?: "上传失败",
                         )
                     }
                 } finally {
@@ -108,7 +108,7 @@ class TransferQueueManager(
             updateTask(taskId) { it.copy(status = TransferStatus.IN_PROGRESS) }
             try {
                 val stream = appContext.contentResolver.openOutputStream(destinationUri)
-                    ?: throw IllegalStateException("Не удалось открыть файл назначения")
+                    ?: throw IllegalStateException("无法打开目标文件")
                 stream.use { output ->
                     sftpRepository.downloadStream(remotePath, output) { transferred, total ->
                         updateTask(taskId) {
@@ -132,7 +132,7 @@ class TransferQueueManager(
                 updateTask(taskId) {
                     it.copy(
                         status = TransferStatus.FAILED,
-                        errorMessage = t.message ?: "Ошибка скачивания",
+                        errorMessage = t.message ?: "下载失败",
                     )
                 }
             } finally {

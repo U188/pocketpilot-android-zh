@@ -240,7 +240,7 @@ class UsageViewModel(
             .replace(',', '.')
             .toDoubleOrNull()
         if (parsed == null || parsed < 0.0) {
-            _events.tryEmit("Введите корректное число единиц баланса")
+            _events.tryEmit("请输入有效的余额数量")
             return
         }
         viewModelScope.launch {
@@ -249,7 +249,7 @@ class UsageViewModel(
                 balanceUnits = parsed,
             )
             filterState.update { it.copy(manualBalanceInputText = "") }
-            _events.tryEmit("Остаток баланса сохранён")
+            _events.tryEmit("余额已保存")
         }
     }
 
@@ -257,14 +257,14 @@ class UsageViewModel(
         val current = uiState.value
         viewModelScope.launch {
             usageRepository.clearManualBalance(current.activeServerId)
-            _events.tryEmit("Баланс очищен")
+            _events.tryEmit("余额已清空")
         }
     }
 
     fun syncFromServer() {
         val current = uiState.value
         if (!current.isConnected || current.activeServerId <= 0L) {
-            _events.tryEmit("Подключитесь к серверу для синхронизации")
+            _events.tryEmit("连接服务器后即可同步")
             return
         }
         if (current.isSyncing) return
@@ -277,12 +277,12 @@ class UsageViewModel(
                     includeAllServerSessions = current.scope == UsageScope.SERVER,
                 )
                 _events.tryEmit(
-                    "Синхронизировано: сессий ${result.sessionsScanned}, сообщений ${result.messagesCached}",
+                    "已同步：${result.sessionsScanned} 个会话，${result.messagesCached} 条消息",
                 )
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Throwable) {
-                _events.tryEmit("Ошибка синхронизации: ${e.message ?: e::class.java.simpleName}")
+                _events.tryEmit("同步失败：${e.message ?: e::class.java.simpleName}")
             } finally {
                 filterState.update { it.copy(isSyncing = false) }
             }

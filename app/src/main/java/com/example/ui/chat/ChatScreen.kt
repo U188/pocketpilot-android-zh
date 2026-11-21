@@ -1644,11 +1644,11 @@ private fun ChatMessageBubble(
                         if (tokens != null && tokens.hasAny) {
                             val ioStr = "${UsageCalculator.formatTokenCount(tokens.input)} / ${UsageCalculator.formatTokenCount(tokens.output)}"
                             val cacheSuffix = if (tokens.totalCacheTokens > 0L) {
-                                " (+кэш ${UsageCalculator.formatTokenCount(tokens.totalCacheTokens)})"
+                                "（+缓存 ${UsageCalculator.formatTokenCount(tokens.totalCacheTokens)}）"
                             } else {
                                 ""
                             }
-                            add("$ioStr ток.$cacheSuffix")
+                            add("$ioStr 令牌$cacheSuffix")
                         }
                         if (computed != null) {
                             if (computed.hasCurrencyCost && computed.currencyCostUsd != null) {
@@ -1657,7 +1657,7 @@ private fun ChatMessageBubble(
                                 add(notSetText)
                             }
                             if (pricing != null && computed.providerUnits > 0.0) {
-                                add("${UsageCalculator.formatUnits(computed.providerUnits)} (оценка)")
+                                add("${UsageCalculator.formatUnits(computed.providerUnits)}（估算）")
                             }
                         }
                     }.joinToString(" • ")

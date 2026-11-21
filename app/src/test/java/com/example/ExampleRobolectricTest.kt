@@ -648,11 +648,11 @@ class ExampleRobolectricTest {
         assertTrue(com.example.data.update.AppUpdateManager.mapHttpErrorToMessage(404).contains("404"))
         assertTrue(
             com.example.data.update.AppUpdateManager.mapHttpErrorToMessage(403, rateLimitRemaining = "0")
-                .contains("лимит", ignoreCase = true),
+                .contains("请求限制", ignoreCase = true),
         )
         assertTrue(
             com.example.data.update.AppUpdateManager.mapHttpErrorToMessage(429)
-                .contains("лимит", ignoreCase = true),
+                .contains("请求限制", ignoreCase = true),
         )
 
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -678,8 +678,8 @@ class ExampleRobolectricTest {
         assertFalse(com.example.data.update.AppUpdateManager.isValidApkMagic(badApk))
         badApk.delete()
 
-        assertEquals("512 Б", com.example.data.update.AppUpdateManager.formatBytes(512L))
-        assertEquals("1.5 МБ", com.example.data.update.AppUpdateManager.formatBytes((1.5 * 1024 * 1024).toLong()))
+        assertEquals("512 字节", com.example.data.update.AppUpdateManager.formatBytes(512L))
+        assertEquals("1.5 MB", com.example.data.update.AppUpdateManager.formatBytes((1.5 * 1024 * 1024).toLong()))
     }
 
     @Test
@@ -759,9 +759,9 @@ class ExampleRobolectricTest {
         assertEquals("08.05 21:45", com.example.ui.chat.ChatTimeFormatter.formatMessageTimestamp(otherDay, now, zone))
         assertEquals("31.12.2024 23:59", com.example.ui.chat.ChatTimeFormatter.formatMessageTimestamp(prevYear, now, zone))
 
-        assertEquals("за 14 с", com.example.ui.chat.ChatTimeFormatter.formatGenerationDuration(1000L, 15_000L))
-        assertEquals("за 1 мин 12 с", com.example.ui.chat.ChatTimeFormatter.formatGenerationDuration(1000L, 73_000L))
-        assertEquals("за 2 мин", com.example.ui.chat.ChatTimeFormatter.formatGenerationDuration(1000L, 121_000L))
+        assertEquals("用时 14 秒", com.example.ui.chat.ChatTimeFormatter.formatGenerationDuration(1000L, 15_000L))
+        assertEquals("用时 1 分 12 秒", com.example.ui.chat.ChatTimeFormatter.formatGenerationDuration(1000L, 73_000L))
+        assertEquals("用时 2 分钟", com.example.ui.chat.ChatTimeFormatter.formatGenerationDuration(1000L, 121_000L))
 
         val assistantMsg = com.example.domain.model.OpenCodeMessage(
             id = "m1",
@@ -774,10 +774,10 @@ class ExampleRobolectricTest {
             ),
             error = "Предупреждение",
         )
-        assertEquals("за 14 с", com.example.ui.chat.ChatTimeFormatter.resolveAssistantDuration(assistantMsg, 5_000L))
+        assertEquals("用时 14 秒", com.example.ui.chat.ChatTimeFormatter.resolveAssistantDuration(assistantMsg, 5_000L))
         val copied = com.example.ui.chat.ChatTimeFormatter.buildCopyableMessageText(assistantMsg)
         assertTrue(copied.contains("Привет, мир"))
-        assertTrue(copied.contains("Ошибка: Предупреждение"))
+        assertTrue(copied.contains("错误：警告"))
     }
 
     @Test

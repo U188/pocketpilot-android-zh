@@ -183,7 +183,7 @@ fun SettingsScreen(
                 runCatching {
                     context.contentResolver.openInputStream(uri)?.use { input ->
                         input.bufferedReader(Charsets.UTF_8).readText()
-                    } ?: error("Не удалось открыть выбранный файл")
+                    } ?: error("无法打开所选文件")
                 }
             }
             readResult.onSuccess { content ->
@@ -191,7 +191,7 @@ fun SettingsScreen(
                 pendingImportContent = content
             }.onFailure { err ->
                 backupBannerIsError = true
-                backupBannerMessage = "Ошибка чтения файла: ${err.message.orEmpty()}"
+                backupBannerMessage = "读取文件失败：${err.message.orEmpty()}"
             }
         }
     }
@@ -1325,7 +1325,7 @@ fun SettingsScreen(
                     val encryptedResult = viewModel.exportEncryptedBackup(password)
                     if (encryptedResult.isFailure) {
                         isBackupBusy = false
-                        backupDialogError = encryptedResult.exceptionOrNull()?.message ?: "Ошибка шифрования"
+                        backupDialogError = encryptedResult.exceptionOrNull()?.message ?: "加密失败"
                         return@launch
                     }
                     val writeResult = withContext(Dispatchers.IO) {
@@ -1333,7 +1333,7 @@ fun SettingsScreen(
                             context.contentResolver.openOutputStream(targetUri)?.use { out ->
                                 out.write(encryptedResult.getOrThrow().toByteArray(Charsets.UTF_8))
                                 out.flush()
-                            } ?: error("Не удалось записать файл")
+                            } ?: error("无法写入文件")
                         }
                     }
                     isBackupBusy = false
@@ -1343,7 +1343,7 @@ fun SettingsScreen(
                         backupBannerIsError = false
                         backupBannerMessage = backupExportSuccessMsg
                     } else {
-                        backupDialogError = writeResult.exceptionOrNull()?.message ?: "Ошибка сохранения файла"
+                        backupDialogError = writeResult.exceptionOrNull()?.message ?: "保存文件失败"
                     }
                 }
             },
@@ -1368,9 +1368,9 @@ fun SettingsScreen(
                     importResult.onSuccess { res ->
                         pendingImportContent = null
                         backupBannerIsError = false
-                        backupBannerMessage = "Импортировано профилей: ${res.importedCount}, обновлено: ${res.updatedCount}"
+                        backupBannerMessage = "已导入 ${res.importedCount} 个配置，更新 ${res.updatedCount} 个"
                     }.onFailure { err ->
-                        backupDialogError = err.message ?: "Не удалось расшифровать файл"
+                        backupDialogError = err.message ?: "无法解密文件"
                     }
                 }
             },

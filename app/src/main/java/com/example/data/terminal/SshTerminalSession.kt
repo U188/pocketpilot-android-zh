@@ -67,7 +67,7 @@ class SshTerminalSession(
         readerJob = scope.launch {
             try {
                 val client = connectionManager.getActiveSshClient()
-                    ?: throw IllegalStateException("SSH-соединение не активно")
+                    ?: throw IllegalStateException("SSH 连接未激活")
 
                 val session = client.startSession()
                 sshSession = session
@@ -139,7 +139,7 @@ class SshTerminalSession(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (t: Throwable) {
-                _errorMessage.value = t.message ?: "Ошибка SSH PTY"
+                _errorMessage.value = t.message ?: "SSH PTY 错误"
                 _status.value = TerminalTabStatus.ERROR
             } finally {
                 closeStreams()
@@ -156,7 +156,7 @@ class SshTerminalSession(
                     out.write(bytes)
                     out.flush()
                 }.onFailure { err ->
-                    _errorMessage.value = err.message ?: "Не удалось отправить ввод"
+                    _errorMessage.value = err.message ?: "无法发送输入"
                 }
             }
         }

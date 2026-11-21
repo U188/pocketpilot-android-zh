@@ -81,7 +81,7 @@ class SftpRepository(
     suspend fun createDirectory(parentPath: String, name: String): String = withSftp { sftp ->
         val cleanName = name.trim().trim('/')
         require(cleanName.isNotEmpty() && !cleanName.contains('/')) {
-            "Некорректное имя папки"
+            "文件夹名称无效"
         }
         val fullPath = joinRemotePath(parentPath, cleanName)
         sftp.mkdir(fullPath)
@@ -91,7 +91,7 @@ class SftpRepository(
     suspend fun createEmptyFile(parentPath: String, name: String): String = withSftp { sftp ->
         val cleanName = name.trim().trim('/')
         require(cleanName.isNotEmpty() && !cleanName.contains('/')) {
-            "Некорректное имя файла"
+            "文件名无效"
         }
         val fullPath = joinRemotePath(parentPath, cleanName)
         val remoteFile = sftp.open(
@@ -105,7 +105,7 @@ class SftpRepository(
     suspend fun rename(oldPath: String, newName: String): String = withSftp { sftp ->
         val cleanName = newName.trim().trim('/')
         require(cleanName.isNotEmpty() && !cleanName.contains('/')) {
-            "Некорректное имя"
+            "名称无效"
         }
         val parent = parentRemotePath(oldPath)
         val targetPath = joinRemotePath(parent, cleanName)
@@ -138,7 +138,7 @@ class SftpRepository(
             val (exitCode, stderr) = execCommand(cmd)
             if (exitCode != 0) {
                 throw IllegalStateException(
-                    stderr.ifBlank { "Не удалось скопировать ${entry.name}" },
+                    stderr.ifBlank { "无法复制 ${entry.name}" },
                 )
             }
         }
@@ -163,11 +163,11 @@ class SftpRepository(
         val normalized = normalizeRemotePath(path)
         val attrs = sftp.stat(normalized)
         if (attrs.type == FileMode.Type.DIRECTORY) {
-            throw IllegalArgumentException("Нельзя открыть папку в редакторе")
+            throw IllegalArgumentException("无法在编辑器中打开文件夹")
         }
         if (attrs.size > MAX_EDITOR_FILE_BYTES) {
             throw IllegalArgumentException(
-                "Файл слишком большой для редактора (> ${MAX_EDITOR_FILE_BYTES / (1024 * 1024)} МБ)",
+                "文件过大，无法在编辑器中打开（> ${MAX_EDITOR_FILE_BYTES / (1024 * 1024)} MB）",
             )
         }
 
@@ -410,7 +410,7 @@ class SftpRepository(
                     block(sftp)
                 } catch (e: SFTPException) {
                     throw IllegalStateException(
-                        e.message?.takeIf { it.isNotBlank() } ?: "Ошибка SFTP (${e.statusCode})",
+                        e.message?.takeIf { it.isNotBlank() } ?: "SFTP 错误（${e.statusCode}）",
                         e,
                     )
                 }
@@ -419,7 +419,7 @@ class SftpRepository(
 
     private fun requireActiveClient(): SSHClient {
         return connectionManager.getActiveSshClient()
-            ?: throw IllegalStateException("Нет активного SSH-подключения")
+            ?: throw IllegalStateException("没有活动的 SSH 连接")
     }
 
     private fun getOrOpenSftp(client: SSHClient): SFTPClient {

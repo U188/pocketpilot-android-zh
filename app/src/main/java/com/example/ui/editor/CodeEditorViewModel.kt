@@ -148,7 +148,7 @@ class CodeEditorViewModel(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        errorMessage = err.message ?: "Не удалось открыть файл",
+                        errorMessage = err.message ?: "无法打开文件",
                     )
                 }
             }
@@ -371,7 +371,7 @@ class CodeEditorViewModel(
                     forceOverwrite = forceOverwrite,
                 )
             }.getOrElse { err ->
-                SaveFileResult.Error(err.message ?: "Ошибка сохранения файла")
+                SaveFileResult.Error(err.message ?: "保存文件失败")
             }
 
             when (result) {

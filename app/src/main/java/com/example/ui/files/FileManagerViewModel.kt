@@ -183,7 +183,7 @@ class FileManagerViewModel(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        errorMessage = err.message ?: "Не удалось открыть каталог",
+                        errorMessage = err.message ?: "无法打开目录",
                     )
                 }
             }
@@ -217,7 +217,7 @@ class FileManagerViewModel(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        errorMessage = err.message ?: "Не удалось прочитать папку",
+                        errorMessage = err.message ?: "无法读取文件夹",
                     )
                 }
             }
@@ -304,7 +304,7 @@ class FileManagerViewModel(
     fun pasteClipboard() {
         val clip = _uiState.value.clipboard ?: return
         val targetDir = _uiState.value.currentPath
-        runMutation("Выполнено") {
+        runMutation("已完成") {
             when (clip.operation) {
                 ClipboardOperation.COPY -> sftpRepository.copyEntries(clip.entries, targetDir)
                 ClipboardOperation.CUT -> sftpRepository.moveEntries(clip.entries, targetDir)
@@ -328,26 +328,26 @@ class FileManagerViewModel(
                 onCreated(fullPath)
             }.onFailure { err ->
                 _uiState.update { it.copy(isMutating = false) }
-                _messages.tryEmit(err.message ?: "Не удалось создать файл")
+                _messages.tryEmit(err.message ?: "无法创建文件")
             }
         }
     }
 
     fun createFolder(name: String) {
         val parent = _uiState.value.currentPath
-        runMutation("Папка создана") {
+        runMutation("文件夹已创建") {
             sftpRepository.createDirectory(parent, name)
         }
     }
 
     fun renameEntry(entry: RemoteFileEntry, newName: String) {
-        runMutation("Переименовано") {
+        runMutation("已重命名") {
             sftpRepository.rename(entry.path, newName)
         }
     }
 
     fun moveEntries(entries: List<RemoteFileEntry>, targetDir: String) {
-        runMutation("Перемещено") {
+        runMutation("已移动") {
             sftpRepository.moveEntries(entries, targetDir)
             _uiState.update { it.copy(selectedPaths = emptySet()) }
         }
@@ -355,14 +355,14 @@ class FileManagerViewModel(
 
     fun deleteEntries(entries: List<RemoteFileEntry>) {
         if (entries.isEmpty()) return
-        runMutation("Удалено: ${entries.size}") {
+        runMutation("已删除：${entries.size} 项") {
             sftpRepository.deleteEntries(entries)
             _uiState.update { it.copy(selectedPaths = emptySet()) }
         }
     }
 
     fun chmodEntry(entry: RemoteFileEntry, permissionsMask: Int) {
-        runMutation("Права обновлены (${"%04o".format(permissionsMask and 0xFFF)})") {
+        runMutation("权限已更新（${"%04o".format(permissionsMask and 0xFFF)}）") {
             sftpRepository.chmod(entry.path, permissionsMask)
         }
     }
@@ -416,7 +416,7 @@ class FileManagerViewModel(
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 _uiState.update { it.copy(isSearching = false, searchPerformed = true) }
-                _messages.tryEmit(err.message ?: "Ошибка поиска")
+                _messages.tryEmit(err.message ?: "搜索失败")
             }
         }
     }
@@ -460,7 +460,7 @@ class FileManagerViewModel(
     fun uploadFiles(uris: List<Uri>) {
         if (uris.isEmpty() || !_uiState.value.isConnected) return
         transferQueueManager.enqueueUploads(uris, _uiState.value.currentPath)
-        _messages.tryEmit("Добавлено в очередь загрузки: ${uris.size}")
+        _messages.tryEmit("已加入上传队列：${uris.size} 项")
     }
 
     fun downloadFileToUri(entry: RemoteFileEntry, destinationUri: Uri) {
@@ -471,7 +471,7 @@ class FileManagerViewModel(
             sizeBytes = entry.sizeBytes,
             destinationUri = destinationUri,
         )
-        _messages.tryEmit("Скачивание «${entry.name}» начато")
+        _messages.tryEmit("已开始下载“${entry.name}”")
     }
 
     fun cancelTransfer(taskId: String) = transferQueueManager.cancelTask(taskId)
@@ -513,7 +513,7 @@ class FileManagerViewModel(
                 downloadFileToUri(entry, destUri)
                 refreshLocalSafFolder()
             } else {
-                _messages.tryEmit("Не удалось создать файл в выбранной папке телефона")
+                _messages.tryEmit("无法在手机所选文件夹中创建文件")
             }
         }
     }
@@ -530,7 +530,7 @@ class FileManagerViewModel(
             }.onFailure { err ->
                 if (err is CancellationException) throw err
                 _uiState.update { it.copy(isMutating = false) }
-                _messages.tryEmit(err.message ?: "Ошибка операции")
+                _messages.tryEmit(err.message ?: "操作失败")
             }
         }
     }
