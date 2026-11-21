@@ -44,8 +44,10 @@ jobs:
           java-version: 17
           cache: gradle
 
-      - name: Generate temporary debug signing key
-        run: keytool -genkeypair -keystore debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+      - name: Restore stable debug signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: echo "$KEYSTORE_B64" | base64 -d > debug.keystore
 
       - name: Build Chinese debug APK
         run: |
@@ -61,3 +63,14 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish Chinese APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v1.0.${{ github.run_number }}"
+          gh release create "$tag" app/build/outputs/apk/debug/app-debug.apk \
+            --repo "${{ github.repository }}" \
+            --title "$tag" \
+            --notes "PocketPilot 简体中文版构建 ${{ github.run_number }}。上游提交：${{ github.sha }}" \
+            --latest

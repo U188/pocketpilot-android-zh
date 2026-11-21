@@ -99,6 +99,13 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
+            // Check the Chinese fork's Releases when automatic updates are enabled.
+            LaunchedEffect(pendingCrash, settings.autoCheckUpdates) {
+                if (pendingCrash == null && settings.autoCheckUpdates) {
+                    container.appUpdateManager.checkForUpdates(force = false)
+                }
+            }
+
 
             // Request POST_NOTIFICATIONS once on Android 13+ after SSH connects with keep-alive enabled
             LaunchedEffect(connectionState, settings.keepAliveInBackground) {
